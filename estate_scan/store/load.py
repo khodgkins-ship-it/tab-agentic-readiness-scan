@@ -232,6 +232,61 @@ class Store(object):
                  e.get("last_viewed_days_ago")))
         return len(items)
 
+    # -- derive: read fields, write resolved formulas & refs -----------------
+    def fields_for_run(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        cur = self.conn.execute(
+            "SELECT id, name, description, datasource_id, field_type, "
+            "data_type, role, formula, is_calculated FROM fields "
+            "WHERE run_id=? ORDER BY datasource_id, id", (run_id,))
+        return cur.fetchall()
+
+    def clear_resolved(self, run_id):
+        # type: (str) -> None
+        """Drop prior derivation output so a re-run is clean, not additive."""
+        self.conn.execute(
+            "DELETE FROM resolved_formulas WHERE run_id=?", (run_id,))
+        self.conn.execute("DELETE FROM field_refs WHERE run_id=?", (run_id,))
+
+    def save_resolved_formula(self, run_id, field_id, resolved_formula,
+                              normalized_hash, resolution_depth,
+                              resolution_status):
+        # type: (str, str, Optional[str], str, int, str) -> None
+        self.conn.execute(
+            "INSERT OR REPLACE INTO resolved_formulas "
+            "(run_id, field_id, resolved_formula, normalized_hash, "
+            " resolution_depth, resolution_status) VALUES (?,?,?,?,?,?)",
+            (run_id, field_id, resolved_formula, normalized_hash,
+             resolution_depth, resolution_status))
+
+    def save_field_ref(self, run_id, field_id, referenced_field_id):
+        # type: (str, str, str) -> None
+        self.conn.execute(
+            "INSERT OR REPLACE INTO field_refs "
+            "(run_id, field_id, referenced_field_id) VALUES (?,?,?)",
+            (run_id, field_id, referenced_field_id))
+
+    def resolved_formulas(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        cur = self.conn.execute(
+            "SELECT * FROM resolved_formulas WHERE run_id=? ORDER BY field_id",
+            (run_id,))
+        return cur.fetchall()
+
+    def resolution_status_counts(self, run_id):
+        # type: (str) -> Dict[str, int]
+        cur = self.conn.execute(
+            "SELECT resolution_status, COUNT(*) AS c FROM resolved_formulas "
+            "WHERE run_id=? GROUP BY resolution_status", (run_id,))
+        return {row["resolution_status"]: row["c"] for row in cur.fetchall()}
+
+    def field_refs(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        cur = self.conn.execute(
+            "SELECT * FROM field_refs WHERE run_id=? "
+            "ORDER BY field_id, referenced_field_id", (run_id,))
+        return cur.fetchall()
+
     # -- shard state ---------------------------------------------------------
     def get_shard(self, run_id, shard_key):
         # type: (str, str) -> Optional[sqlite3.Row]

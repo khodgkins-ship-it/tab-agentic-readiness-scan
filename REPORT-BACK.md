@@ -51,4 +51,36 @@ thresholds against synthetic data (build brief §7)._
 
 ## 4. Where the resolution logic felt underspecified
 
-_TBD at M3._
+Building M3 surfaced five decisions the spec's pseudocode leaves open. Each was
+resolved conservatively (favouring "flag, don't guess / don't drop"); all are
+worth a second opinion:
+
+- **Multi-defect status precedence.** A field's subtree can contain more than
+  one defect (e.g. a reference that is both deep and dangling). The spec lists
+  four statuses but not which wins. Chosen precedence, worst-first:
+  `cycle > too_deep > unresolved_reference > resolved`. A cycle is treated as
+  the most fundamental because it makes the field non-computable at all.
+- **`resolution_depth` meaning.** The spec's `depth` is a recursion counter used
+  only for the cap; it does not say what to persist. Persisted value is the
+  chain length with a leaf calculation counting as depth 1 (matching the fixture
+  generator's ground-truth convention), so the two can be compared later.
+- **Text carried by a non-resolved field.** The spec says never drop a field but
+  not what `resolved_formula` should hold for a cycle / too-deep / unresolved
+  field. Chosen: the best-effort partial expansion with the offending token left
+  in place, so the row is inspectable and the status flags why it is incomplete.
+- **Ambiguous references have no status of their own.** The spec says to build
+  the token map from name *and* caption and to "flag ambiguous matches rather
+  than guessing", but does not give ambiguity a `resolution_status`. Folded into
+  `unresolved_reference` (the reference is left unexpanded) and counted
+  separately in the resolver summary (`ambiguous_refs`). Captions are absent from
+  the current fixtures, so this path is exercised only by construction, not by
+  data — a live run is where it will first bite.
+- **`field_refs` is untyped.** The schema does not distinguish a reference to a
+  calculated field from one to a base column. Both are recorded, which makes the
+  table a full reference graph; a consumer that only wants calc-to-calc edges
+  must join against `fields.is_calculated`.
+
+Related under-normalization decision (see §... / normalize.py): commutative
+argument-list sorting is listed in the spec as a "where safe" option and is
+deliberately not implemented, because judging safety in a flat token stream is
+the kind of guess that manufactures false collapses.
