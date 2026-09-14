@@ -11,7 +11,7 @@ concern; write-locally is this module's only job.
 
 import os
 import sqlite3
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 _SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
 
@@ -421,6 +421,111 @@ class Store(object):
         cur = self.conn.execute(
             "SELECT * FROM coverage WHERE run_id=? ORDER BY measure", (run_id,))
         return cur.fetchall()
+
+    # -- flags (M5) ---------------------------------------------------------
+    def clear_flags(self, run_id):
+        # type: (str) -> None
+        self.conn.execute("DELETE FROM flags WHERE run_id=?", (run_id,))
+
+    def save_flag(self, run_id, flag_id, severity, confidence, facet, domain,
+                  evidence_json, count, created_at):
+        # type: (str, str, str, str, str, str, str, int, str) -> None
+        self.conn.execute(
+            "INSERT OR REPLACE INTO flags "
+            "(run_id, flag_id, severity, confidence, facet, domain, "
+            " evidence_json, count, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (run_id, flag_id, severity, confidence, facet, domain,
+             evidence_json, count, created_at))
+
+    def flags(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        cur = self.conn.execute(
+            "SELECT * FROM flags WHERE run_id=? ORDER BY flag_id, domain",
+            (run_id,))
+        return cur.fetchall()
+
+    # -- flag measures (M5) -------------------------------------------------
+    # Each returns raw values; thresholds and firing live in the flag engine so
+    # rules.yaml can change firing with no code edit.
+
+    def calc_field_formulas(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        """id, name, formula for calculated fields (SEC-01 scans these)."""
+        cur = self.conn.execute(
+            "SELECT id, name, formula FROM fields "
+            "WHERE run_id=? AND is_calculated=1 ORDER BY id", (run_id,))
+        return cur.fetchall()
+
+    def field_description_coverage(self, run_id):
+        # type: (str) -> Tuple[int, int]
+        """(described, total) over all fields -- SEM-03 description coverage."""
+        total = self.conn.execute(
+            "SELECT COUNT(*) c FROM fields WHERE run_id=?", (run_id,)
+        ).fetchone()["c"]
+        described = self.conn.execute(
+            "SELECT COUNT(*) c FROM fields WHERE run_id=? "
+            "AND TRIM(COALESCE(description,''))<>''", (run_id,)
+        ).fetchone()["c"]
+        return described, total
+
+    def workbook_ds_ref_counts(self, run_id):
+        # type: (str) -> Tuple[int, int]
+        """(embedded, published) datasource references from workbooks, counted
+        through lineage -- DF-01 embedded share."""
+        emb = self.conn.execute(
+            "SELECT COUNT(*) c FROM lineage WHERE run_id=? "
+            "AND downstream_type='workbook' AND upstream_type='embedded_datasource'",
+            (run_id,)).fetchone()["c"]
+        pub = self.conn.execute(
+            "SELECT COUNT(*) c FROM lineage WHERE run_id=? "
+            "AND downstream_type='workbook' AND upstream_type='datasource'",
+            (run_id,)).fetchone()["c"]
+        return emb, pub
+
+    def upstream_table_fanout(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        """Per upstream table, how many published sources trace to it, most
+        first -- DF-02."""
+        cur = self.conn.execute(
+            "SELECT upstream_id, upstream_label, "
+            "       COUNT(DISTINCT downstream_id) AS sources "
+            "FROM lineage WHERE run_id=? "
+            "AND downstream_type='datasource' AND upstream_type='table' "
+            "GROUP BY upstream_id, upstream_label ORDER BY sources DESC, upstream_id",
+            (run_id,))
+        return cur.fetchall()
+
+    def published_on_published_edges(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        """downstream_id -> upstream_id edges where both are published sources.
+        The engine computes the longest chain -- DF-03."""
+        cur = self.conn.execute(
+            "SELECT downstream_id, upstream_id, upstream_label FROM lineage "
+            "WHERE run_id=? AND downstream_type='datasource' "
+            "AND upstream_type='datasource' ORDER BY downstream_id, upstream_id",
+            (run_id,))
+        return cur.fetchall()
+
+    def zero_view_workbooks(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        """Workbooks with no measured views (EST-01). LEFT JOIN so a workbook
+        with no usage_events row counts as zero-view, not as unmeasured-absent."""
+        cur = self.conn.execute(
+            "SELECT w.id AS id, w.name AS name, w.project_name AS project_name "
+            "FROM workbooks w "
+            "LEFT JOIN usage_events ue "
+            "  ON ue.run_id=w.run_id AND ue.workbook_id=w.id "
+            "WHERE w.run_id=? AND COALESCE(ue.event_count,0)=0 "
+            "ORDER BY w.id", (run_id,))
+        return cur.fetchall()
+
+    def workbook_view_counts(self, run_id):
+        # type: (str) -> List[int]
+        """Per-workbook view totals, for concentration measures (ADO-02)."""
+        cur = self.conn.execute(
+            "SELECT COALESCE(event_count,0) AS v FROM usage_events WHERE run_id=?",
+            (run_id,))
+        return [row["v"] for row in cur.fetchall()]
 
     # -- read helpers for the planner / tests -------------------------------
     def datasource_ids(self, run_id):

@@ -1,0 +1,231 @@
+# Estate Scan flag catalog (build spec section 8).
+#
+# This file is the COMPLETE catalog from day one. The prototype implements a
+# subset (SEC-01, SEM-01, SEM-02, SEM-03, DF-01, DF-02, DF-03, EST-01, ADO-02);
+# every other flag is defined here with `implemented: false` so the file
+# documents the whole design and nothing is discovered later by surprise.
+#
+# The field team tunes firing HERE, never in code:
+#   - `threshold` values are read by the evaluator; changing one changes firing.
+#   - `suppress: true` silences a flag that is otherwise implemented; the run
+#     log records that it was suppressed AND whether it would have fired, so a
+#     report never hides a flag without saying so (build spec section 8).
+#
+# All thresholds are PROVISIONAL (build brief section 7). They are not tuned
+# against the synthetic fixtures; the run emits distributions for later
+# calibration from real engagements.
+#
+# Fields per flag:
+#   severity     critical | warning | informational
+#                critical blocks stage 5 for the domain; warning caps stage 3/4
+#                or degrades grounding; informational scopes work.
+#   confidence   observed (straight from API) | derived (inference such as
+#                grouping/lineage) | sampled (partial fetch)
+#   facet        dotted facet id the flag scores or caps (build spec section 9)
+#   feeds        which front-page finding it assembles into, or null
+#   rule         evaluator key in engine.py (only needed when implemented)
+#   threshold    named params the evaluator reads
+#   scope        estate (one row) | domain (one row per declared domain)
+#   implemented  whether the prototype evaluates it
+#   suppress     silence an implemented flag but log the suppression
+
+version: 1
+
+flags:
+
+  # -- security -----------------------------------------------------------
+  SEC-01:
+    severity: critical
+    confidence: observed
+    facet: data.entitlement_at_source
+    feeds: security_finding
+    rule: formula_contains_user_context
+    threshold: {min_count: 1}
+    scope: estate
+    implemented: true
+
+  SEC-02:
+    severity: warning
+    confidence: observed
+    facet: governance.preventive
+    feeds: security_finding
+    rule: permissive_grants
+    threshold: {}
+    scope: estate
+    implemented: false
+
+  # -- semantic -----------------------------------------------------------
+  SEM-01:
+    severity: warning
+    confidence: derived
+    facet: semantic.singularity
+    feeds: variant_table
+    rule: metric_group_variant_count
+    threshold: {variant_count_gt: 5}
+    scope: domain
+    implemented: true
+
+  SEM-02:
+    severity: critical
+    confidence: derived
+    facet: semantic.singularity
+    feeds: variant_table
+    rule: metric_group_no_dominant
+    threshold: {min_usage_variants: 2}
+    scope: domain
+    implemented: true
+
+  SEM-03:
+    severity: warning
+    confidence: observed
+    facet: semantic.describability
+    feeds: variant_table
+    rule: description_coverage
+    threshold: {min_coverage: 0.40}
+    scope: domain
+    implemented: true
+
+  SEM-04:
+    severity: warning
+    confidence: observed
+    facet: semantic.exposure_shape
+    feeds: null
+    rule: datasource_field_count
+    threshold: {max_field_count: 300}
+    scope: estate
+    implemented: false
+
+  # -- data foundation ----------------------------------------------------
+  DF-01:
+    severity: warning
+    confidence: observed
+    facet: semantic.exposure_shape
+    feeds: variant_table
+    rule: embedded_datasource_share
+    threshold: {max_embedded_share: 0.60}
+    scope: estate
+    implemented: true
+
+  DF-02:
+    severity: warning
+    confidence: derived
+    facet: data.provenance
+    feeds: retirement_case
+    rule: upstream_table_fanout
+    threshold: {max_sources_per_table: 10}
+    scope: estate
+    implemented: true
+
+  DF-03:
+    severity: warning
+    confidence: derived
+    facet: data.provenance
+    feeds: retirement_case
+    rule: published_on_published_depth
+    threshold: {min_depth: 2}
+    scope: estate
+    implemented: true
+
+  DF-04:
+    severity: warning
+    confidence: observed
+    facet: data.provenance
+    feeds: null
+    rule: source_without_upstream
+    threshold: {}
+    scope: estate
+    implemented: false
+
+  DF-05:
+    severity: critical
+    confidence: observed
+    facet: data.freshness
+    feeds: security_finding
+    rule: stale_refresh_recent_view
+    threshold: {stale_multiple: 2.0, viewed_within_days: 30}
+    scope: estate
+    implemented: false
+
+  DF-06:
+    severity: warning
+    confidence: observed
+    facet: data.freshness
+    feeds: null
+    rule: refresh_failure_rate
+    threshold: {max_failure_rate: 0.10}
+    scope: estate
+    implemented: false
+
+  DF-07:
+    severity: warning
+    confidence: derived
+    facet: data.retained_grain
+    feeds: null
+    rule: custom_sql_grain_loss
+    threshold: {}
+    scope: estate
+    implemented: false
+    suppress: true   # noisy on large estates (build spec section 8)
+
+  # -- governance ---------------------------------------------------------
+  GOV-01:
+    severity: warning
+    confidence: observed
+    facet: governance.accountability
+    feeds: null
+    rule: source_owner_missing
+    threshold: {}
+    scope: estate
+    implemented: false
+
+  GOV-02:
+    severity: informational
+    confidence: observed
+    facet: data.integrity
+    feeds: null
+    rule: no_data_quality_warnings
+    threshold: {}
+    scope: estate
+    implemented: false
+
+  # -- adoption / lifecycle ----------------------------------------------
+  EST-01:
+    severity: informational
+    confidence: observed
+    facet: adoption.reach
+    feeds: retirement_case
+    rule: zero_view_workbooks
+    threshold: {min_count: 1, idle_days: 90}
+    scope: estate
+    implemented: true
+
+  EST-02:
+    severity: warning
+    confidence: observed
+    facet: semantic.lifecycle
+    feeds: null
+    rule: business_rule_editors
+    threshold: {}
+    scope: estate
+    implemented: false
+    suppress: true   # noisy on large estates (build spec section 8)
+
+  ADO-01:
+    severity: warning
+    confidence: observed
+    facet: adoption.reach
+    feeds: null
+    rule: active_user_penetration
+    threshold: {min_penetration: 0.30}
+    scope: estate
+    implemented: false
+
+  ADO-02:
+    severity: informational
+    confidence: observed
+    facet: adoption.reach
+    feeds: retirement_case
+    rule: view_concentration
+    threshold: {coverage_fraction: 0.80}
+    scope: estate
+    implemented: true
