@@ -287,6 +287,101 @@ class Store(object):
             "ORDER BY field_id, referenced_field_id", (run_id,))
         return cur.fetchall()
 
+    # -- derive: concept grouping (M4) --------------------------------------
+    def calc_fields_resolved(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        """Calculated fields joined to their M3 resolution, the input to
+        grouping. Ordered by field id so grouping is deterministic."""
+        cur = self.conn.execute(
+            "SELECT f.id AS field_id, f.name AS name, f.formula AS formula, "
+            "       f.datasource_id AS datasource_id, "
+            "       r.resolved_formula AS resolved_formula, "
+            "       r.normalized_hash AS normalized_hash, "
+            "       r.resolution_status AS resolution_status "
+            "FROM fields f "
+            "LEFT JOIN resolved_formulas r "
+            "  ON r.run_id = f.run_id AND r.field_id = f.id "
+            "WHERE f.run_id=? AND f.is_calculated=1 "
+            "ORDER BY f.id", (run_id,))
+        return cur.fetchall()
+
+    def field_view_counts(self, run_id):
+        # type: (str) -> Dict[str, Dict[str, int]]
+        """Per calculated field, views and distinct workbook count, joined
+        through field usage to usage_events.
+
+        A field used on several sheets of one workbook counts that workbook's
+        views once: dedupe (field_id, workbook_id) before summing (build brief
+        M4). Workbooks with no usage_events row contribute nothing (inner join),
+        which is correct -- an unmeasured workbook is not a zero-view workbook.
+        """
+        cur = self.conn.execute(
+            "SELECT fu.field_id AS field_id, "
+            "       COALESCE(SUM(ue.event_count), 0) AS views, "
+            "       COUNT(*) AS workbooks "
+            "FROM (SELECT DISTINCT field_id, workbook_id FROM field_usage "
+            "      WHERE run_id=?) fu "
+            "JOIN usage_events ue "
+            "  ON ue.run_id=? AND ue.workbook_id = fu.workbook_id "
+            "GROUP BY fu.field_id", (run_id, run_id))
+        return {row["field_id"]: {"views": row["views"],
+                                  "workbooks": row["workbooks"]}
+                for row in cur.fetchall()}
+
+    def clear_groups(self, run_id):
+        # type: (str) -> None
+        """Drop prior grouping/ranking output so a re-run is clean."""
+        self.conn.execute("DELETE FROM metric_groups WHERE run_id=?", (run_id,))
+        self.conn.execute("DELETE FROM metric_variants WHERE run_id=?", (run_id,))
+
+    def save_metric_group(self, run_id, group_id, canonical_label, confidence,
+                          method):
+        # type: (str, str, str, str, str) -> None
+        self.conn.execute(
+            "INSERT OR REPLACE INTO metric_groups "
+            "(run_id, group_id, canonical_label, confidence, method) "
+            "VALUES (?,?,?,?,?)",
+            (run_id, group_id, canonical_label, confidence, method))
+
+    def save_metric_variant(self, run_id, group_id, field_id, normalized_hash,
+                            usage_rank, view_count, workbook_count, is_dominant):
+        # type: (str, str, str, str, Optional[int], int, int, int) -> None
+        self.conn.execute(
+            "INSERT OR REPLACE INTO metric_variants "
+            "(run_id, group_id, field_id, normalized_hash, usage_rank, "
+            " view_count, workbook_count, is_dominant) VALUES (?,?,?,?,?,?,?,?)",
+            (run_id, group_id, field_id, normalized_hash, usage_rank,
+             view_count, workbook_count, _b(is_dominant)))
+
+    def update_variant_usage(self, run_id, group_id, field_id, usage_rank,
+                             view_count, workbook_count, is_dominant):
+        # type: (str, str, str, int, int, int, int) -> None
+        self.conn.execute(
+            "UPDATE metric_variants SET usage_rank=?, view_count=?, "
+            "workbook_count=?, is_dominant=? "
+            "WHERE run_id=? AND group_id=? AND field_id=?",
+            (usage_rank, view_count, workbook_count, _b(is_dominant),
+             run_id, group_id, field_id))
+
+    def metric_groups(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        cur = self.conn.execute(
+            "SELECT * FROM metric_groups WHERE run_id=? ORDER BY group_id",
+            (run_id,))
+        return cur.fetchall()
+
+    def metric_variants(self, run_id, group_id=None):
+        # type: (str, Optional[str]) -> List[sqlite3.Row]
+        if group_id is None:
+            cur = self.conn.execute(
+                "SELECT * FROM metric_variants WHERE run_id=? "
+                "ORDER BY group_id, usage_rank, field_id", (run_id,))
+        else:
+            cur = self.conn.execute(
+                "SELECT * FROM metric_variants WHERE run_id=? AND group_id=? "
+                "ORDER BY usage_rank, field_id", (run_id, group_id))
+        return cur.fetchall()
+
     # -- shard state ---------------------------------------------------------
     def get_shard(self, run_id, shard_key):
         # type: (str, str) -> Optional[sqlite3.Row]

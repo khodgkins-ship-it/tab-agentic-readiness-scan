@@ -46,8 +46,41 @@ a genuine upstream contribution candidate. **Do not open a PR without asking.**
 
 ## 3. Observed distribution of variant counts and dominance ratios (median fixture)
 
-_TBD at M4/M5 — instrument the run to emit the distribution. Do not tune
-thresholds against synthetic data (build brief §7)._
+**Status: instrumented at M4.** `rank.py::rank_groups` returns
+`variant_count_distribution`, `dominance_ratios`, and per-group `detail`. These
+are the numbers a real engagement would set thresholds *from*; on synthetic data
+they are reported, not acted on (build brief §7 — the dominance rule is not
+tuned against fixtures).
+
+Observed on `tests/fixtures/median` (5 concept groups, 82 grouping candidates,
+22 entitlement fields excluded):
+
+| group | variants | group_views | cover80 | dominant | top÷2nd ratio |
+|---|---|---|---|---|---|
+| revenue | 47 | 10000 | 3 | **yes** | 5.64 |
+| active_customer | 14 | 12500 | 7 | no | 1.36 |
+| gross_margin | 8 | 5200 | 6 | no | 1.11 |
+| average_order_value | 7 | 4800 | 5 | no | 1.20 |
+| churn_rate | 6 | 4000 | 5 | no | 1.25 |
+
+Variant-count distribution: `{6:1, 7:1, 8:1, 14:1, 47:1}`.
+
+**Do the provisional thresholds (share ≥0.60, ratio ≥2.0) look sane?** Against
+this fixture, yes, but only because the fixture was built to separate cleanly:
+the one intentionally-dominant group clears both gates by a wide margin (0.62
+share, 5.64 ratio) and the four contested groups sit far below the ratio gate
+(1.1–1.4). There is nothing in the 1.4–2.0 band, so the fixture cannot tell us
+whether 2.0 is the right cut — it only confirms the rule fires on an obvious
+case and stays silent on obviously-contested ones. **A real engagement is
+needed to populate the ambiguous middle; do not read the clean separation here
+as validation of the threshold value.**
+
+**Confidence-method observation.** Every median group resolves as
+`formula_token`/medium, never `exact_match`/high, because each concept is
+multi-variant by construction, so no group is a single exact-normalized cluster.
+The high-confidence path is real but only exercised on the `small` (clean)
+fixture, where a metric with one definition should group at high confidence. The
+`method_counts` summary makes this visible per run.
 
 ## 4. Where the resolution logic felt underspecified
 
