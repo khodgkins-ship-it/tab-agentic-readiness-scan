@@ -229,3 +229,158 @@ flags:
     threshold: {coverage_fraction: 0.80}
     scope: estate
     implemented: true
+
+
+# ---------------------------------------------------------------------------
+# Facet catalog and scoring bands (build spec section 9).
+#
+# Each facet scores 1..6. Two derivation paths:
+#   - threshold facets: a `measure` compared against ordered `bands`; the facet
+#     takes the HIGHEST band whose condition holds.
+#   - flag-capped facets: `caps` pull the score down when a flag fires; a single
+#     critical flag is a hard ceiling regardless of measure.
+#
+# Band condition grammar (evaluated by score/facets.py, never eval()'d):
+#   "< 0.4"                      measure < 0.4
+#   "0.4 - 0.7"                  0.4 <= measure <= 0.7
+#   "> 0.7"                      measure > 0.7
+#   "> 0.7 and ratified == true" measure clause AND named-input booleans, joined
+#                                by " and ". A named input the scan cannot see is
+#                                absent and reads false, so scan-only runs cannot
+#                                reach bands that need interview evidence.
+#
+# `scored: true` marks the facets the PROTOTYPE derives -- the semantic and
+# adoption facets its flags cover. Every other facet is defined here for the
+# complete catalog but left unscored (build brief M6): its dimension reports as
+# unscored rather than as clean, and it becomes scorable only by interview.
+#
+# `gates` lists the stage transitions the facet gates entry into. The dimension
+# rollup at a target stage takes the minimum across facets gating THAT stage;
+# facets gating lower transitions are reported but do not cap.
+#
+# All bands are PROVISIONAL and not tuned against fixtures (build brief 7).
+
+facets:
+
+  # -- semantic (scored in the prototype) ---------------------------------
+  semantic.singularity:
+    dimension: semantic
+    evidence: observed
+    scored: true
+    measure: dominant_variant_share    # share of scoped core metrics with a dominant variant
+    bands:
+      2: "< 0.4"
+      3: "0.4 - 0.7"
+      4: "> 0.7 and duplicates_deprecated == true"
+      5: "> 0.7 and duplicates_deprecated == true and ratified == true"
+      6: "estate_wide == true"
+    gates: [5]
+
+  semantic.describability:
+    dimension: semantic
+    evidence: observed
+    scored: true
+    measure: description_coverage      # share of fields carrying a description
+    bands:
+      2: "< 0.4"
+      3: "0.4 - 0.7"
+      4: "> 0.7"
+    gates: [3]
+
+  semantic.exposure_shape:
+    dimension: semantic
+    evidence: observed
+    scored: true
+    measure: published_datasource_share  # published / (published + embedded) refs
+    bands:
+      2: "< 0.4"
+      3: "0.4 - 0.7"
+      4: "> 0.7"
+    gates: [3]
+
+  semantic.consensus:
+    dimension: semantic
+    evidence: interview      # not observable; the binding facet for many estates
+    scored: false
+    gates: [5]
+
+  # -- adoption (scored in the prototype) ---------------------------------
+  adoption.reach:
+    dimension: adoption
+    evidence: observed
+    scored: true
+    measure: content_activation        # share of workbooks with any measured views
+    bands:
+      2: "< 0.4"
+      3: "0.4 - 0.7"
+      4: "> 0.7"
+    gates: [3]
+
+  adoption.decision_culture:
+    dimension: adoption
+    evidence: interview
+    scored: false
+    gates: [4, 5]
+
+  # -- data (defined, unscored in the prototype) --------------------------
+  # Kept unscored per build brief M6, but carries the cap block so the
+  # flag-capped path is exercised (see tests/test_score.py). Scoring it would
+  # cap the data dimension at 2 and tie the binding constraint; the prototype
+  # leaves it out of the rollup deliberately.
+  data.entitlement_at_source:
+    dimension: data
+    evidence: observed
+    scored: false
+    base: 6
+    caps:
+      - flag: SEC-01
+        when: "count > 0"
+        max_score: 2
+    gates: [5]
+
+  data.provenance:
+    dimension: data
+    evidence: derived
+    scored: false
+    gates: [3]
+
+  # -- other dimensions (defined, unscored) -------------------------------
+  action.reversibility:
+    dimension: action_surface
+    evidence: interview
+    scored: false
+    gates: [5]
+
+  operating.ownership:
+    dimension: operating_model
+    evidence: interview
+    scored: false
+    gates: [5]
+
+  value.attribution:
+    dimension: value
+    evidence: interview
+    scored: false
+    gates: [4]
+
+
+# ---------------------------------------------------------------------------
+# Governance loop (build spec section 9.3). Governance does NOT roll up by
+# minimum. It scores at the highest stage whose loop CLOSES completely: every
+# arc active at that stage must reach the tier the stage demands.
+#
+# Arc activation differs by stage on purpose. Corrective has nothing to stop
+# until agents act, so it activates at stage 5. Assurance activates at stage 3.
+# `activates_at` is the lowest stage at which the arc must hold; below it the
+# arc does not constrain the loop.
+#
+# All arcs are interview-derived and therefore unscored in the prototype, so
+# governance reports as unscored. The closure machinery is built and unit-tested
+# (tests/test_score.py) so it is ready when interview capture supplies arc
+# scores.
+governance_arcs:
+  preventive:     {activates_at: 2}
+  detective:      {activates_at: 3}
+  assurance:      {activates_at: 3}
+  corrective:     {activates_at: 5}
+  accountability: {activates_at: 2}

@@ -9,6 +9,7 @@ This module never issues an API call. Read-only-against-Tableau is a client
 concern; write-locally is this module's only job.
 """
 
+import json
 import os
 import sqlite3
 from typing import Dict, List, Optional, Tuple
@@ -80,10 +81,37 @@ class Store(object):
             (completed_at, coverage_json, run_id))
         self.conn.commit()
 
+    def set_run_config(self, run_id, config_json):
+        # type: (str, str) -> None
+        self.conn.execute("UPDATE runs SET config_json=? WHERE run_id=?",
+                          (config_json, run_id))
+        self.conn.commit()
+
+    def run_config(self, run_id):
+        # type: (str) -> Optional[dict]
+        """The config `scan` persisted (declared domains, target stages, core
+        metrics). `score` reads it back so the run carries its own scope."""
+        cur = self.conn.execute(
+            "SELECT config_json FROM runs WHERE run_id=?", (run_id,))
+        row = cur.fetchone()
+        if row is None or row["config_json"] is None:
+            return None
+        return json.loads(row["config_json"])
+
     def get_run(self, run_id):
         # type: (str) -> Optional[sqlite3.Row]
         cur = self.conn.execute("SELECT * FROM runs WHERE run_id=?", (run_id,))
         return cur.fetchone()
+
+    def latest_run_id(self):
+        # type: () -> Optional[str]
+        """The most recently started run (the CLI subcommands operate on one
+        run per store, so `interview`/`score`/`report` resolve it here)."""
+        cur = self.conn.execute(
+            "SELECT run_id FROM runs ORDER BY COALESCE(started_at,'') DESC, "
+            "run_id DESC LIMIT 1")
+        row = cur.fetchone()
+        return row["run_id"] if row else None
 
     # -- project name -> id resolution --------------------------------------
     def _project_map(self, run_id):
@@ -427,6 +455,13 @@ class Store(object):
         # type: (str) -> None
         self.conn.execute("DELETE FROM flags WHERE run_id=?", (run_id,))
 
+    def clear_flag(self, run_id, flag_id):
+        # type: (str, str) -> None
+        """Clear one flag id (M6 uses this so re-scoring rebuilds its INT-01
+        rows without disturbing the M5 flags the flag engine wrote)."""
+        self.conn.execute("DELETE FROM flags WHERE run_id=? AND flag_id=?",
+                          (run_id, flag_id))
+
     def save_flag(self, run_id, flag_id, severity, confidence, facet, domain,
                   evidence_json, count, created_at):
         # type: (str, str, str, str, str, str, str, int, str) -> None
@@ -540,3 +575,61 @@ class Store(object):
         cur = self.conn.execute(
             "SELECT COUNT(*) AS c FROM %s WHERE run_id=?" % table, (run_id,))
         return cur.fetchone()["c"]
+
+    # -- scoring measures (M6) ----------------------------------------------
+    def dominant_group_share(self, run_id):
+        # type: (str) -> Tuple[int, int]
+        """(dominant groups, total groups) -- the semantic.singularity measure.
+        A group is dominant when its rank-1 variant carries the group (M4)."""
+        total = self.conn.execute(
+            "SELECT COUNT(*) c FROM metric_groups WHERE run_id=?", (run_id,)
+        ).fetchone()["c"]
+        dominant = self.conn.execute(
+            "SELECT COUNT(DISTINCT group_id) c FROM metric_variants "
+            "WHERE run_id=? AND is_dominant=1", (run_id,)
+        ).fetchone()["c"]
+        return dominant, total
+
+    def workbook_count(self, run_id):
+        # type: (str) -> int
+        return self.conn.execute(
+            "SELECT COUNT(*) c FROM workbooks WHERE run_id=?", (run_id,)
+        ).fetchone()["c"]
+
+    # -- interview capture (M6) ---------------------------------------------
+    def clear_interview(self, run_id):
+        # type: (str) -> None
+        self.conn.execute("DELETE FROM interview_responses WHERE run_id=?",
+                          (run_id,))
+
+    def save_interview_response(self, run_id, facet_id, score, evidence_note,
+                                source_role, source_name, captured_at,
+                                captured_by, confidence):
+        # type: (str, str, Optional[int], str, str, str, str, str, str) -> None
+        self.conn.execute(
+            "INSERT OR REPLACE INTO interview_responses "
+            "(run_id, facet_id, score, evidence_note, source_role, source_name, "
+            " captured_at, captured_by, confidence) VALUES (?,?,?,?,?,?,?,?,?)",
+            (run_id, facet_id, score, evidence_note, source_role, source_name,
+             captured_at, captured_by, confidence))
+
+    def interview_responses(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        cur = self.conn.execute(
+            "SELECT * FROM interview_responses WHERE run_id=? "
+            "ORDER BY facet_id, source_role", (run_id,))
+        return cur.fetchall()
+
+    # -- score output (M6) --------------------------------------------------
+    def save_score_output(self, run_id, findings_json, created_at):
+        # type: (str, str, str) -> None
+        self.conn.execute(
+            "INSERT OR REPLACE INTO score_output "
+            "(run_id, findings_json, created_at) VALUES (?,?,?)",
+            (run_id, findings_json, created_at))
+
+    def score_output(self, run_id):
+        # type: (str) -> Optional[sqlite3.Row]
+        cur = self.conn.execute(
+            "SELECT * FROM score_output WHERE run_id=?", (run_id,))
+        return cur.fetchone()

@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS runs (
     tool_version    TEXT,
     query_set_version TEXT,
     model_pass      INTEGER DEFAULT 0,   -- concept grouping model pass used?
-    coverage_json   TEXT
+    coverage_json   TEXT,
+    config_json     TEXT   -- specialist-supplied domains, target stages, core metrics
 );
 
 CREATE TABLE IF NOT EXISTS projects (
@@ -205,6 +206,35 @@ CREATE TABLE IF NOT EXISTS coverage (
     status  TEXT,     -- ok | partial | failed | skipped
     reason  TEXT,
     PRIMARY KEY (run_id, measure)
+);
+
+-- interview capture (M6, build spec section 10). A second input to the same
+-- store, joined at scoring time. The scan never overwrites these and these
+-- never overwrite the scan: where both exist, the scan wins and the interview
+-- response is kept as corroboration or (via INT-01) conflict.
+
+CREATE TABLE IF NOT EXISTS interview_responses (
+    run_id        TEXT,
+    facet_id      TEXT,
+    score         INTEGER,
+    evidence_note TEXT,
+    source_role   TEXT,     -- data_platform_lead | analytics_leader | security | ...
+    source_name   TEXT,     -- optional, excluded from the presentation build
+    captured_at   TEXT,
+    captured_by   TEXT,
+    confidence    TEXT,     -- reported
+    PRIMARY KEY (run_id, facet_id, source_role)
+);
+
+-- score output (M6). Scoring is deterministic over the store, but the CLI runs
+-- `score` and `report` as separate steps, so the computed register is persisted
+-- as the JSON contract shape (build spec 9.6) rather than re-normalized into
+-- columns -- under-normalize rather than over-normalize.
+
+CREATE TABLE IF NOT EXISTS score_output (
+    run_id       TEXT PRIMARY KEY,
+    findings_json TEXT,
+    created_at   TEXT
 );
 
 -- operational: resumable shard state (build brief M2: "persist shard
