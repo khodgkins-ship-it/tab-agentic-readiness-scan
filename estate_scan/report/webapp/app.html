@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tableau Estate Readiness</title>
+<style>
+/*__CSS__*/
+</style>
+</head>
+<body>
+<!--
+  Single self-contained file. CSS and JS inline, findings embedded below as
+  JSON. No external assets, no network calls of any kind -- this opens from a
+  filesystem on guest wifi or no wifi (report web app spec sections 1-2).
+  The embedded payload is a documented subset of findings.json; see app.js.
+-->
+<header class="topbar" role="banner">
+  <div class="topbar-left">
+    <span class="wordmark">Estate&nbsp;Scan</span>
+    <span id="build-banner" class="build-banner" role="status"></span>
+  </div>
+  <nav class="topbar-right" aria-label="View controls">
+    <div class="mode-toggle" role="tablist" aria-label="View mode">
+      <button id="mode-present" role="tab" aria-selected="true"
+              class="mode-btn is-active">Present</button>
+      <button id="mode-explore" role="tab" aria-selected="false"
+              class="mode-btn">Explore</button>
+    </div>
+    <button id="coverage-open" class="ghost-btn"
+            aria-haspopup="dialog">Coverage &amp; run info</button>
+  </nav>
+</header>
+
+<main id="app" class="app" tabindex="-1">
+  <!-- sections rendered by app.js -->
+</main>
+
+<!-- present-mode pager, hidden in explore and in print -->
+<div id="pager" class="pager" aria-hidden="true">
+  <button id="pager-prev" class="pager-btn" aria-label="Previous section">&#8592;</button>
+  <span id="pager-label" class="pager-label"></span>
+  <button id="pager-next" class="pager-btn" aria-label="Next section">&#8594;</button>
+</div>
+
+<!-- coverage panel, a modal dialog reachable from the header -->
+<div id="coverage-panel" class="drawer" role="dialog" aria-modal="true"
+     aria-labelledby="coverage-title" hidden>
+  <div class="drawer-inner">
+    <div class="drawer-head">
+      <h2 id="coverage-title">Coverage &amp; run metadata</h2>
+      <button id="coverage-close" class="ghost-btn" aria-label="Close">Close</button>
+    </div>
+    <div id="coverage-body"></div>
+  </div>
+</div>
+<div id="drawer-scrim" class="drawer-scrim" hidden></div>
+
+<script id="findings-data" type="application/json">__PAYLOAD__</script>
+<script>
+/*__JS__*/
+</script>
+</body>
+</html>

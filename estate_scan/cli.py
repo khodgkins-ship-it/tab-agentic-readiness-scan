@@ -70,10 +70,19 @@ def _resolve_run(store):
 
 # -- scan --------------------------------------------------------------------
 
+def _fixture_path(path):
+    # type: (str) -> str
+    """Accept either a fixture directory (containing estate.json) or the JSON
+    file directly, so `scan --fixture tests/fixtures/median` works."""
+    if os.path.isdir(path):
+        return os.path.join(path, "estate.json")
+    return path
+
+
 def cmd_scan(args):
     # type: (argparse.Namespace) -> int
     store = _open_store(args.out, fresh=True)
-    client = FixtureClient.from_path(args.fixture)
+    client = FixtureClient.from_path(_fixture_path(args.fixture))
     config = client.run_config()
     run_id = new_run_id()
 

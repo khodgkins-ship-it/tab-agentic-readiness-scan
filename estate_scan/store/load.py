@@ -633,3 +633,85 @@ class Store(object):
         cur = self.conn.execute(
             "SELECT * FROM score_output WHERE run_id=?", (run_id,))
         return cur.fetchone()
+
+    # -- report read helpers (M7) -------------------------------------------
+    # The findings assembler (report/findings.py) reads through these so the
+    # SQL stays in the store layer, consistent with the flag measures above.
+
+    def run_meta(self, run_id):
+        # type: (str) -> Optional[sqlite3.Row]
+        """Run-level metadata for the coverage panel and report header."""
+        cur = self.conn.execute("SELECT * FROM runs WHERE run_id=?", (run_id,))
+        return cur.fetchone()
+
+    def group_variant_detail(self, run_id, group_id):
+        # type: (str, str) -> List[sqlite3.Row]
+        """Every variant of a group with the detail the drill-down needs: the
+        field name and resolved formula, usage rank and counts, and the owning
+        data source and its owner. Ordered by usage rank."""
+        cur = self.conn.execute(
+            "SELECT mv.field_id AS field_id, f.name AS field_name, "
+            "       mv.usage_rank AS usage_rank, mv.view_count AS view_count, "
+            "       mv.workbook_count AS workbook_count, "
+            "       mv.is_dominant AS is_dominant, "
+            "       mv.normalized_hash AS normalized_hash, "
+            "       rf.resolved_formula AS resolved_formula, "
+            "       rf.resolution_status AS resolution_status, "
+            "       ds.name AS datasource_name, ds.owner AS owner "
+            "FROM metric_variants mv "
+            "LEFT JOIN fields f ON f.run_id=mv.run_id AND f.id=mv.field_id "
+            "LEFT JOIN resolved_formulas rf "
+            "  ON rf.run_id=mv.run_id AND rf.field_id=mv.field_id "
+            "LEFT JOIN datasources ds "
+            "  ON ds.run_id=mv.run_id AND ds.id=f.datasource_id "
+            "WHERE mv.run_id=? AND mv.group_id=? "
+            "ORDER BY mv.usage_rank, mv.field_id", (run_id, group_id))
+        return cur.fetchall()
+
+    def group_workbook_count(self, run_id, group_id):
+        # type: (str, str) -> int
+        """Distinct workbooks any variant of the group is used in."""
+        cur = self.conn.execute(
+            "SELECT COUNT(DISTINCT fu.workbook_id) AS c "
+            "FROM metric_variants mv "
+            "JOIN field_usage fu "
+            "  ON fu.run_id=mv.run_id AND fu.field_id=mv.field_id "
+            "WHERE mv.run_id=? AND mv.group_id=? "
+            "AND TRIM(COALESCE(fu.workbook_id,''))<>''", (run_id, group_id))
+        return cur.fetchone()["c"]
+
+    def calc_field_detail(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        """Calculated fields with formula, owning source, and owner -- the
+        input to the security-exposure finding (user-context functions are
+        matched in Python, sharing SEC-01's function list)."""
+        cur = self.conn.execute(
+            "SELECT f.id AS id, f.name AS name, f.formula AS formula, "
+            "       ds.name AS datasource_name, ds.owner AS owner "
+            "FROM fields f "
+            "LEFT JOIN datasources ds "
+            "  ON ds.run_id=f.run_id AND ds.id=f.datasource_id "
+            "WHERE f.run_id=? AND f.is_calculated=1 ORDER BY f.id", (run_id,))
+        return cur.fetchall()
+
+    def workbooks_for_fields(self, run_id, field_ids):
+        # type: (str, List[str]) -> List[sqlite3.Row]
+        """Distinct workbooks (id, name, owner) that use any of `field_ids`."""
+        if not field_ids:
+            return []
+        marks = ",".join("?" for _ in field_ids)
+        cur = self.conn.execute(
+            "SELECT DISTINCT w.id AS id, w.name AS name, w.owner AS owner "
+            "FROM field_usage fu "
+            "JOIN workbooks w ON w.run_id=fu.run_id AND w.id=fu.workbook_id "
+            "WHERE fu.run_id=? AND fu.field_id IN (%s) "
+            "AND TRIM(COALESCE(fu.workbook_id,''))<>'' "
+            "ORDER BY w.id" % marks, [run_id] + list(field_ids))
+        return cur.fetchall()
+
+    def total_measured_views(self, run_id):
+        # type: (str) -> int
+        cur = self.conn.execute(
+            "SELECT COALESCE(SUM(event_count),0) AS v FROM usage_events "
+            "WHERE run_id=?", (run_id,))
+        return cur.fetchone()["v"]
