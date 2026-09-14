@@ -1,0 +1,136 @@
+{
+  "core_metrics": [
+    "revenue",
+    "active_customer",
+    "gross_margin",
+    "churn_rate",
+    "average_order_value"
+  ],
+  "counts": {
+    "calculated_fields": 5,
+    "datasources": 20,
+    "fields_total": 445,
+    "projects": 3,
+    "workbooks": 100
+  },
+  "depth_histogram": {
+    "1": 5
+  },
+  "dominant_variant_share": 1.0,
+  "embedded_share": 0.0,
+  "field_description_coverage": 0.9079,
+  "flags_expected": {
+    "ADO-02": {
+      "fires": true,
+      "workbooks_covering_80pct_views": 55
+    },
+    "DF-01": {
+      "embedded_share": 0.0,
+      "fires": false
+    },
+    "DF-02": {
+      "count": 2,
+      "fires": false
+    },
+    "DF-03": {
+      "depth": 0,
+      "fires": false
+    },
+    "EST-01": {
+      "count": 0,
+      "fires": false
+    },
+    "SEC-01": {
+      "count": 0,
+      "fires": false
+    },
+    "SEM-01": {
+      "fires": false,
+      "groups": []
+    },
+    "SEM-02": {
+      "fires": false,
+      "groups": []
+    },
+    "SEM-03": {
+      "coverage": 0.9079,
+      "fires": false
+    }
+  },
+  "metric_groups": {
+    "active_customer": {
+      "disagreeing_variants": 1,
+      "distinct_definitions": 1,
+      "dominant": true,
+      "fires_sem01": false,
+      "fires_sem02": false,
+      "group_views": 278,
+      "variants": 1,
+      "variants_covering_80pct_views": 1,
+      "variants_with_usage": 1
+    },
+    "average_order_value": {
+      "disagreeing_variants": 1,
+      "distinct_definitions": 1,
+      "dominant": true,
+      "fires_sem01": false,
+      "fires_sem02": false,
+      "group_views": 292,
+      "variants": 1,
+      "variants_covering_80pct_views": 1,
+      "variants_with_usage": 1
+    },
+    "churn_rate": {
+      "disagreeing_variants": 1,
+      "distinct_definitions": 1,
+      "dominant": true,
+      "fires_sem01": false,
+      "fires_sem02": false,
+      "group_views": 415,
+      "variants": 1,
+      "variants_covering_80pct_views": 1,
+      "variants_with_usage": 1
+    },
+    "gross_margin": {
+      "disagreeing_variants": 1,
+      "distinct_definitions": 1,
+      "dominant": true,
+      "fires_sem01": false,
+      "fires_sem02": false,
+      "group_views": 475,
+      "variants": 1,
+      "variants_covering_80pct_views": 1,
+      "variants_with_usage": 1
+    },
+    "revenue": {
+      "disagreeing_variants": 1,
+      "distinct_definitions": 1,
+      "dominant": true,
+      "fires_sem01": false,
+      "fires_sem02": false,
+      "group_views": 217,
+      "variants": 1,
+      "variants_covering_80pct_views": 1,
+      "variants_with_usage": 1
+    }
+  },
+  "nested_calc_max_depth": 1,
+  "profile": "small",
+  "provenance": {
+    "max_published_on_published_depth": 0,
+    "max_sources_per_upstream_table": 2,
+    "sources_without_upstream": 0
+  },
+  "query_set_version": "v1",
+  "sec01_expected": false,
+  "seed": 7,
+  "tool_version": "0.1.0",
+  "user_context_fields": 0,
+  "view_concentration": {
+    "total_views": 14671,
+    "workbooks_covering_70pct_views": 45,
+    "workbooks_covering_80pct_views": 55,
+    "workbooks_total": 100,
+    "zero_view_workbooks": 0
+  }
+}

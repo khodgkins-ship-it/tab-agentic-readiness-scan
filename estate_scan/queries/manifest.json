@@ -1,0 +1,56 @@
+{
+  "query_set_version": "v1",
+  "tool_version": "0.1.0",
+  "note": "Fixed, versioned query set. Queries are addressed by name and never generated at runtime, so findings are comparable across reruns and accounts (build brief section 6). Checksums are verified at load; regenerate with `python -m estate_scan.queries.checksum` after editing any .graphql file.",
+  "graphql": {
+    "projects": {
+      "file": "v1/projects.graphql",
+      "sha256": "9f396900207b947df73d006966d1f94763983af01b144d3e0e79d0e8fd2bf5d0",
+      "shard": {
+        "scope": "global",
+        "page_size": 1000,
+        "cursor_var": "after",
+        "first_var": "first"
+      }
+    },
+    "published_datasources": {
+      "file": "v1/published_datasources.graphql",
+      "sha256": "de8e97a5bc49903ae53f43d27eedfcbfa03437de7526de5b38e7cd729b959d6d",
+      "shard": {
+        "scope": "global",
+        "page_size": 200,
+        "cursor_var": "after",
+        "first_var": "first"
+      }
+    },
+    "workbooks": {
+      "file": "v1/workbooks.graphql",
+      "sha256": "028b61a14623b58f905425149ef181212cb2b7cf7c5e9032cbbc9d1500946fb4",
+      "shard": {
+        "scope": "global",
+        "page_size": 200,
+        "cursor_var": "after",
+        "first_var": "first"
+      }
+    },
+    "datasource_fields": {
+      "file": "v1/datasource_fields.graphql",
+      "sha256": "d46618e78a2654ed768c69497b7b29c19883811a04608800c8203718ae624552",
+      "shard": {
+        "scope": "per_datasource",
+        "scope_var": "dsId",
+        "page_size": 200,
+        "cursor_var": "after",
+        "first_var": "first"
+      }
+    }
+  },
+  "rest": {
+    "usage_events": {
+      "description": "Per-workbook view counts and per-user activity over the retention window. Live source is Admin Insights (Cloud) or the repository (Server); both are deferred out of the prototype. Served offline by the fixture client so ranking, EST-01 and ADO-02 work without network access.",
+      "live_source": "admin_insights|repository",
+      "adoption_source_default": "unavailable",
+      "deferred_live": true
+    }
+  }
+}

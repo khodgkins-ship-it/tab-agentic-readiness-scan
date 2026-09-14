@@ -1,0 +1,53 @@
+# Query: datasource_fields
+# Stage 4, the volume stage. Fields are scoped to ONE published data source per
+# call and the source's fieldsConnection is cursor-paginated.
+#
+# IMPORTANT schema correctness note (verified against the metadata explorer's
+# app/static/schema/api-pitfalls.md, contradicting spec 02 §5 / 03 §5.1):
+# field-type connections filter ONLY on id / name / isHidden / text -- there is
+# NO datasourceId or datasourceIdWithin argument on calculatedFieldsConnection.
+# So we scope by selecting the source via publishedDatasourcesConnection with an
+# idWithin filter and paginate its nested fieldsConnection. Resolution is scoped
+# to this containing source (spec 03 §7.1: names collide across sources).
+#
+# fieldsConnection returns the Field interface; __typename distinguishes
+# CalculatedField (carries formula) from plain columns.
+query datasource_fields($dsId: ID!, $first: Int!, $after: String) {
+  publishedDatasourcesConnection(filter: { idWithin: [$dsId] }) {
+    nodes {
+      id
+      luid
+      name
+      fieldsConnection(first: $first, after: $after) {
+        nodes {
+          __typename
+          id
+          name
+          description
+          isHidden
+          ... on CalculatedField {
+            formula
+            dataType
+            role
+            # Field-level usage linkage. Usage ranking (spec 03 §7.4) attributes
+            # a variant's views to the workbooks whose sheets reference it, then
+            # joins to usage_events by workbook. UNCONFIRMED against live schema
+            # (M7 report-back): on a large estate this nested list may itself hit
+            # a node limit and need to become a paginated connection.
+            sheetsUsedIn: referencedBySheets {
+              id
+              name
+              workbook { id luid }
+            }
+          }
+          ... on ColumnField {
+            dataType
+            role
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+        totalCount
+      }
+    }
+  }
+}

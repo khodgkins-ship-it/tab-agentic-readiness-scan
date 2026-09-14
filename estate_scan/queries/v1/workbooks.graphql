@@ -1,0 +1,25 @@
+# Query: workbooks
+# Stage 3. Workbooks with embedded data sources and sheets. upstreamDatasources
+# links a workbook to the published sources it consumes; embeddedDatasources
+# feeds the embedded-share flag (DF-01). sheetCount / dashboards size the
+# workbook. Usage is NOT here -- the Metadata API does not carry view counts;
+# those come from the usage_events resource (REST / Admin Insights substitute).
+query workbooks($first: Int!, $after: String) {
+  workbooksConnection(first: $first, after: $after) {
+    nodes {
+      id
+      luid
+      name
+      projectName
+      createdAt
+      updatedAt
+      owner { username email: name }
+      upstreamDatasources { id luid name }
+      embeddedDatasources { id name }
+      sheets { id name }
+      dashboards { id name }
+    }
+    pageInfo { hasNextPage endCursor }
+    totalCount
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "core_metrics": [],
+  "counts": {
+    "calculated_fields": 25,
+    "datasources": 2,
+    "fields_total": 69,
+    "projects": 1,
+    "workbooks": 2
+  },
+  "depth_histogram": {
+    "-1": 2,
+    "1": 5,
+    "10": 1,
+    "11": 1,
+    "12": 1,
+    "13": 1,
+    "14": 1,
+    "2": 4,
+    "3": 2,
+    "4": 2,
+    "5": 1,
+    "6": 1,
+    "7": 1,
+    "8": 1,
+    "9": 1
+  },
+  "dominant_variant_share": 0.0,
+  "embedded_share": 0.0,
+  "field_description_coverage": 0.6667,
+  "flags_expected": {
+    "ADO-02": {
+      "fires": true,
+      "workbooks_covering_80pct_views": 1
+    },
+    "DF-01": {
+      "embedded_share": 0.0,
+      "fires": false
+    },
+    "DF-02": {
+      "count": 1,
+      "fires": false
+    },
+    "DF-03": {
+      "depth": 0,
+      "fires": false
+    },
+    "EST-01": {
+      "count": 0,
+      "fires": false
+    },
+    "SEC-01": {
+      "count": 0,
+      "fires": false
+    },
+    "SEM-01": {
+      "fires": false,
+      "groups": []
+    },
+    "SEM-02": {
+      "fires": false,
+      "groups": []
+    },
+    "SEM-03": {
+      "coverage": 0.6667,
+      "fires": false
+    }
+  },
+  "metric_groups": {},
+  "nested_calc_max_depth": 14,
+  "profile": "hostile",
+  "provenance": {
+    "max_published_on_published_depth": 0,
+    "max_sources_per_upstream_table": 1,
+    "sources_without_upstream": 0
+  },
+  "query_set_version": "v1",
+  "sec01_expected": false,
+  "seed": 1301,
+  "tool_version": "0.1.0",
+  "user_context_fields": 0,
+  "view_concentration": {
+    "total_views": 18,
+    "workbooks_covering_70pct_views": 1,
+    "workbooks_covering_80pct_views": 1,
+    "workbooks_total": 2,
+    "zero_view_workbooks": 0
+  }
+}

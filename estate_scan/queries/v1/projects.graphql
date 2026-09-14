@@ -1,0 +1,17 @@
+# Query: projects
+# Stage 1 of extraction. Projects are the top-level shard key (spec 03 §5.1).
+# Cursor-paginated via the *Connection form; the unbounded list form times out
+# on any real estate.
+query projects($first: Int!, $after: String) {
+  projectsConnection(first: $first, after: $after) {
+    nodes {
+      id
+      name
+      # parentProjectName is not universally present; the live client tolerates
+      # its absence and records it in coverage. Fixtures always supply it.
+      parentProjectName
+    }
+    pageInfo { hasNextPage endCursor }
+    totalCount
+  }
+}

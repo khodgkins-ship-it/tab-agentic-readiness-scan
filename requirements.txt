@@ -1,0 +1,10 @@
+# Estate Scan runtime dependencies.
+# Kept minimal per the build brief (section 3). SQLite is used through the
+# standard library with plain SQL, so it is not listed here.
+httpx>=0.24        # live client HTTP (fixture-mode pipeline does not use it)
+jinja2>=3.0        # report.md and report.html rendering
+openpyxl>=3.0      # variants.xlsx
+pyyaml>=6.0        # rules.yaml, interview.yaml, facet/scoring config
+
+# Dev / test only:
+pytest>=7.0

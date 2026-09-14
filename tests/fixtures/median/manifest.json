@@ -1,0 +1,150 @@
+{
+  "core_metrics": [
+    "revenue",
+    "active_customer",
+    "gross_margin",
+    "churn_rate",
+    "average_order_value"
+  ],
+  "counts": {
+    "calculated_fields": 104,
+    "datasources": 200,
+    "fields_total": 2744,
+    "projects": 10,
+    "workbooks": 1000
+  },
+  "depth_histogram": {
+    "1": 101,
+    "2": 1,
+    "3": 1,
+    "4": 1
+  },
+  "dominant_variant_share": 0.2,
+  "embedded_share": 0.9197,
+  "field_description_coverage": 0.547,
+  "flags_expected": {
+    "ADO-02": {
+      "fires": true,
+      "workbooks_covering_80pct_views": 106
+    },
+    "DF-01": {
+      "embedded_share": 0.9197,
+      "fires": true
+    },
+    "DF-02": {
+      "count": 12,
+      "fires": true
+    },
+    "DF-03": {
+      "depth": 2,
+      "fires": true
+    },
+    "EST-01": {
+      "count": 150,
+      "fires": true
+    },
+    "SEC-01": {
+      "count": 22,
+      "fires": true
+    },
+    "SEM-01": {
+      "fires": true,
+      "groups": [
+        "active_customer",
+        "average_order_value",
+        "churn_rate",
+        "gross_margin",
+        "revenue"
+      ]
+    },
+    "SEM-02": {
+      "fires": true,
+      "groups": [
+        "active_customer",
+        "average_order_value",
+        "churn_rate",
+        "gross_margin"
+      ]
+    },
+    "SEM-03": {
+      "coverage": 0.547,
+      "fires": false
+    }
+  },
+  "metric_groups": {
+    "active_customer": {
+      "disagreeing_variants": 9,
+      "distinct_definitions": 9,
+      "dominant": false,
+      "fires_sem01": true,
+      "fires_sem02": true,
+      "group_views": 12500,
+      "variants": 14,
+      "variants_covering_80pct_views": 7,
+      "variants_with_usage": 14
+    },
+    "average_order_value": {
+      "disagreeing_variants": 2,
+      "distinct_definitions": 2,
+      "dominant": false,
+      "fires_sem01": true,
+      "fires_sem02": true,
+      "group_views": 4800,
+      "variants": 7,
+      "variants_covering_80pct_views": 5,
+      "variants_with_usage": 7
+    },
+    "churn_rate": {
+      "disagreeing_variants": 2,
+      "distinct_definitions": 2,
+      "dominant": false,
+      "fires_sem01": true,
+      "fires_sem02": true,
+      "group_views": 4000,
+      "variants": 6,
+      "variants_covering_80pct_views": 5,
+      "variants_with_usage": 6
+    },
+    "gross_margin": {
+      "disagreeing_variants": 3,
+      "distinct_definitions": 3,
+      "dominant": false,
+      "fires_sem01": true,
+      "fires_sem02": true,
+      "group_views": 5200,
+      "variants": 8,
+      "variants_covering_80pct_views": 6,
+      "variants_with_usage": 8
+    },
+    "revenue": {
+      "disagreeing_variants": 15,
+      "distinct_definitions": 15,
+      "dominant": true,
+      "fires_sem01": true,
+      "fires_sem02": false,
+      "group_views": 10000,
+      "variants": 47,
+      "variants_covering_80pct_views": 3,
+      "variants_with_usage": 47
+    }
+  },
+  "nested_calc_max_depth": 4,
+  "profile": "median",
+  "provenance": {
+    "max_published_on_published_depth": 2,
+    "max_sources_per_upstream_table": 12,
+    "sources_without_upstream": 3
+  },
+  "query_set_version": "v1",
+  "sec01_expected": true,
+  "seed": 42,
+  "tool_version": "0.1.0",
+  "user_context_fields": 22,
+  "view_concentration": {
+    "total_views": 287130,
+    "workbooks_covering_70pct_views": 85,
+    "workbooks_covering_80pct_views": 106,
+    "workbooks_total": 1000,
+    "zero_view_workbooks": 150
+  }
+}
