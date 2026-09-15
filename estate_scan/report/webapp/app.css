@@ -138,6 +138,19 @@ table.grid tbody tr.clickable:hover { background: var(--surface-alt); }
   border-radius: 4px; padding: .5rem .6rem; overflow-x: auto; white-space: pre-wrap; }
 .redacted { color: var(--ink-soft); font-style: italic; }
 
+/* VDS same-period side-by-side (material disagreement, spec 4.2) */
+.execution { border: 1px solid var(--line-strong); border-radius: 6px;
+  padding: .7rem .9rem; margin: .2rem 0 .8rem; background: var(--surface-alt); }
+.execution-head { font-size: .85rem; margin-bottom: .5rem; }
+.execution-pair { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+@media (max-width: 640px) { .execution-pair { grid-template-columns: 1fr; } }
+.execution-cell { border: 1px solid var(--line); border-radius: 5px;
+  padding: .6rem .8rem; background: var(--surface); }
+.execution-cell.reference { border-left: 4px solid var(--accent); }
+.execution-cell.variant { border-left: 4px solid var(--binding); }
+.execution-cell .fact-value { font-size: 1.3rem; font-weight: 700;
+  margin-top: .2rem; }
+
 /* expandable rows (dimensions / register) */
 details.expander { border: 1px solid var(--line); border-radius: 5px;
   margin: .5rem 0; }

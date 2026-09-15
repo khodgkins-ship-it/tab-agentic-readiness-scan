@@ -33,14 +33,27 @@ HTML_WORKING = "report.working.html"
 LOG_NAME = "run.log"
 
 
-def emit_all(store, run_id, out_dir, build="presentation"):
-    # type: (object, str, str, str) -> List[str]
+def emit_all(store, run_id, out_dir, build="presentation", framing="full"):
+    # type: (object, str, str, str, str) -> List[str]
     """Emit every artifact for `run_id` into `out_dir`. Returns the written
-    paths, presentation build first when `build` is 'presentation'."""
+    paths, presentation build first when `build` is 'presentation'.
+
+    `framing` selects the report register (report web app spec section 8):
+    'full' shows the stage/readiness/score framing; 'light' presents the same
+    findings, coverage, and remediation with no stage or score language, for
+    accounts that reject a maturity ladder. It is one render flag on one
+    payload -- both builds and both HTML files carry it -- not a second
+    pipeline; redaction and the secret scan are unchanged.
+    """
     if build not in ("presentation", "working"):
         raise ValueError("build must be 'presentation' or 'working', got %r" % build)
+    if framing not in ("full", "light"):
+        raise ValueError("framing must be 'full' or 'light', got %r" % framing)
 
     findings = build_findings(store, run_id)
+    # Stamp the framing into meta BEFORE the builds branch, so both the working
+    # and presentation copies (and every artifact derived from them) carry it.
+    findings["meta"]["framing"] = framing
     working = mark_working(findings)
     presentation = redact(findings)
 
@@ -86,15 +99,16 @@ def emit_all(store, run_id, out_dir, build="presentation"):
     else:
         paths.extend([p_working, p_present])
 
-    _log(out_dir, run_id, build, paths)
+    _log(out_dir, run_id, build, framing, paths)
     return paths
 
 
-def _log(out_dir, run_id, build, paths):
-    # type: (str, str, str, List[str]) -> None
+def _log(out_dir, run_id, build, framing, paths):
+    # type: (str, str, str, str, List[str]) -> None
     now = datetime.datetime.utcnow().isoformat() + "Z"
-    line = ("[%s] report emit run=%s primary=%s builds=working,presentation "
-            "artifacts=%s\n"
-            % (now, run_id, build, ",".join(os.path.basename(p) for p in paths)))
+    line = ("[%s] report emit run=%s primary=%s framing=%s "
+            "builds=working,presentation artifacts=%s\n"
+            % (now, run_id, build, framing,
+               ",".join(os.path.basename(p) for p in paths)))
     with open(os.path.join(out_dir, LOG_NAME), "a", encoding="utf-8") as fh:
         fh.write(line)

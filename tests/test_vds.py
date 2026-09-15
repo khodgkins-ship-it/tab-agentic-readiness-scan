@@ -16,6 +16,7 @@ Three layers, all offline (no network, no credentials):
 
 import json
 import os
+import re
 
 import pytest
 
@@ -32,7 +33,8 @@ from estate_scan.derive.disagreement import (
 )
 from estate_scan.readonly import ReadOnlyViolation, assert_vds_body_read_only
 from estate_scan.report.findings import _definition_multiplicity
-from estate_scan.report.redact import REDACTED, redact
+from estate_scan.report.redact import REDACTED, mark_working, redact
+from estate_scan.report.webapp import render_html, webapp_payload
 from estate_scan.store import Store
 
 from tests.transport import FixtureTransport
@@ -297,3 +299,54 @@ def test_findings_join_surfaces_execution_and_redaction_removes_raw_values():
     assert pvar["Revenue"]["execution"]["value"] == REDACTED
     assert pvar["RevenueV2"]["execution"]["value"] == REDACTED
     assert pvar["RevenueV2"]["execution"]["material"] is True
+
+
+# -- R5: the execution figures reach the web app (and stay redacted) ----------
+
+def _findings_with_execution():
+    """A minimal full findings dict carrying the seeded VDS execution rows, the
+    shape emit hands to the web app."""
+    store, _summary = _material_store()
+    dm = _definition_multiplicity(store, "r")
+    return {"meta": {"framing": "full"}, "facets": [], "domains": [],
+            "flags": [], "coverage": [],
+            "findings": {"definition_multiplicity": dm,
+                         "security_exposure": {}, "retirement": {}}}
+
+
+def _embedded_payload(html):
+    m = re.search(
+        r'<script id="findings-data" type="application/json">(.*?)</script>',
+        html, re.DOTALL)
+    assert m, "no embedded findings payload"
+    return json.loads(m.group(1))
+
+
+def _exec_group(payload):
+    return payload["findings"]["definition_multiplicity"]["groups"][0]
+
+
+def test_execution_surfaces_in_working_webapp_payload():
+    # Read the payload out of the actual rendered HTML, so this proves the figure
+    # travels all the way into the self-contained document.
+    html = render_html(mark_working(_findings_with_execution()))
+    group = _exec_group(_embedded_payload(html))
+    assert group["execution"]["most_material_pair"]["variant_field"] == "RevenueV2"
+    assert group["execution"]["most_material_pair"]["reference_value"] == 1000.0
+    var = {v["field_name"]: v for v in group["variants"]}
+    assert var["RevenueV2"]["execution"]["value"] == 1200.0
+
+
+def test_execution_redacted_in_presentation_webapp():
+    html = render_html(redact(_findings_with_execution()))
+    group = _exec_group(_embedded_payload(html))
+    pair = group["execution"]["most_material_pair"]
+    # Raw executed values are gone from the embedded payload; the safe diff
+    # figures remain so the material gap is still shown.
+    assert pair["reference_value"] == REDACTED
+    assert pair["variant_value"] == REDACTED
+    assert pair["material"] is True
+    assert abs(pair["rel_diff"] - 0.2) < 1e-9
+    var = {v["field_name"]: v for v in group["variants"]}
+    assert var["Revenue"]["execution"]["value"] == REDACTED
+    assert var["RevenueV2"]["execution"]["value"] == REDACTED

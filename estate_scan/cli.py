@@ -287,12 +287,55 @@ def cmd_report(args):
         print("        scan/interview/score output is in %s"
               % _db_path(args.out))
         return 0
-    paths = emit_all(store, run_id, args.out, build=args.build)  # type: ignore
+    paths = emit_all(store, run_id, args.out, build=args.build,  # type: ignore
+                     framing=args.framing)
     store.close()
-    print("report: wrote %d artifact(s) to %s" % (len(paths), args.out))
+    print("report: wrote %d artifact(s) to %s (framing: %s)"
+          % (len(paths), args.out, args.framing))
     for p in paths:
         print("  %s" % p)
     return 0
+
+
+# -- compare -----------------------------------------------------------------
+
+def cmd_compare(args):
+    # type: (argparse.Namespace) -> int
+    """Compare two runs of one account over time -- the "why did this number
+    move" question the versioned query set exists to answer. Reads the two
+    findings.json artifacts directly (each `scan`/`report` writes its own into a
+    separate out-dir), so it needs no store and never connects anywhere."""
+    from estate_scan.report.compare import (compare_runs,
+                                            render_comparison_markdown)
+    baseline = _load_findings(args.baseline)
+    current = _load_findings(args.current)
+    delta = compare_runs(baseline, current)
+    md = render_comparison_markdown(delta)
+
+    if args.out:
+        if not os.path.isdir(args.out):
+            os.makedirs(args.out)
+        out_path = os.path.join(args.out, "comparison.md")
+        with open(out_path, "w", encoding="utf-8") as fh:
+            fh.write(md)
+        print("compare: wrote %s" % out_path)
+        if not delta["comparable"]:
+            for w in delta["warnings"]:
+                print("  warning: %s" % w)
+    else:
+        sys.stdout.write(md)
+    return 0
+
+
+def _load_findings(path):
+    # type: (str) -> dict
+    """Accept either a findings.json file or an out-dir containing one."""
+    if os.path.isdir(path):
+        path = os.path.join(path, "findings.json")
+    if not os.path.exists(path):
+        raise SystemExit("no findings.json at %s; run `report` first" % path)
+    with open(path, "r", encoding="utf-8") as fh:
+        return json.load(fh)
 
 
 # -- argument parsing --------------------------------------------------------
@@ -358,7 +401,27 @@ def build_parser():
     p_report.add_argument("--build", choices=["presentation", "working"],
                           default="presentation",
                           help="which redaction build to name in the console")
+    p_report.add_argument("--framing", choices=["full", "light"],
+                          default="full",
+                          help="'full' emits stages, facet scores, and the "
+                               "readiness register; 'light' emits the same "
+                               "findings and coverage with no stage/score "
+                               "language, for accounts that reject a ladder")
     p_report.set_defaults(func=cmd_report)
+
+    p_compare = sub.add_parser(
+        "compare",
+        help="compare two runs of one account over time (reads two "
+             "findings.json artifacts; offline, connects nowhere)")
+    p_compare.add_argument("--baseline", required=True,
+                           help="the earlier run's findings.json (or its "
+                                "out-dir)")
+    p_compare.add_argument("--current", required=True,
+                           help="the later run's findings.json (or its out-dir)")
+    p_compare.add_argument("--out",
+                           help="write comparison.md here; without it, the "
+                                "comparison prints to stdout")
+    p_compare.set_defaults(func=cmd_compare)
 
     return parser
 

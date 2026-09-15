@@ -13,6 +13,7 @@
   - the pre-emit secret scan aborts the whole emit on a hit rather than warning
 """
 
+import copy
 import json
 import os
 import re
@@ -27,6 +28,7 @@ from estate_scan.derive.resolve import resolve_all
 from estate_scan.extract.runner import ExtractRunner
 from estate_scan.flags.engine import evaluate_flags
 from estate_scan.report import emit
+from estate_scan.report.compare import compare_runs, render_comparison_markdown
 from estate_scan.report.emit import emit_all
 from estate_scan.report.findings import build_findings
 from estate_scan.report.markdown import render_markdown
@@ -56,9 +58,9 @@ def _scored_store(profile="median"):
     return store, config
 
 
-def _emit(profile, out_dir, build="presentation"):
+def _emit(profile, out_dir, build="presentation", framing="full"):
     store, _config = _scored_store(profile)
-    paths = emit_all(store, "r", str(out_dir), build=build)
+    paths = emit_all(store, "r", str(out_dir), build=build, framing=framing)
     return paths
 
 
@@ -286,3 +288,139 @@ def test_small_fixture_emits_all_artifacts(tmp_path):
     for p in paths:
         assert os.path.getsize(p) > 0
     assert (tmp_path / "report.md").read_text().strip()
+
+
+# -- R5: framing-light -------------------------------------------------------
+# The same payload with a render flag: no maturity ladder, no scores -- for an
+# account that rejects the framing (report web app spec section 8). The
+# forbidden vocabulary is the ladder language the light build must never carry;
+# it must still carry the three findings and the coverage panel.
+
+# Case-insensitive: any of these is stage/score language and must be absent from
+# the light report.md.  "score" is checked as a bare word only, so a metric
+# label like "credit_score" in the data is not a false positive.
+_LADDER_TOKENS = ("stage", "readiness", "maturity", "binding constraint")
+
+
+def _report_md(profile, framing):
+    store, _config = _scored_store(profile)
+    findings = build_findings(store, "r")
+    findings["meta"]["framing"] = framing
+    return render_markdown(redact(findings))
+
+
+def test_framing_light_report_md_has_no_ladder_language():
+    light = _report_md("median", "light").lower()
+    for tok in _LADDER_TOKENS:
+        assert tok not in light, "ladder token %r leaked into light report" % tok
+    assert not re.search(r"\bscore\b", light), "score language leaked into light"
+    # It is still a real report: the three findings and coverage are present.
+    assert "definition multiplicity" in light
+    assert "security exposure" in light
+    assert "retirement" in light
+    assert "coverage" in light
+
+
+def test_full_framing_report_md_keeps_ladder_language():
+    # The differential: the same fixture rendered full DOES carry the ladder
+    # vocabulary, so the light test above is proving a real omission, not an
+    # empty fixture.
+    full = _report_md("median", "full").lower()
+    assert "readiness" in full
+    assert re.search(r"\bscore\b", full)
+    assert "stage" in full
+
+
+@pytest.mark.parametrize("build", ["presentation", "working"])
+def test_framing_light_still_no_formula_in_presentation(tmp_path, build):
+    # Framing is orthogonal to redaction: the light presentation build must
+    # obey the same no-formula / self-contained / offline invariants.
+    _emit("median", tmp_path, build=build, framing="light")
+    working = json.loads((tmp_path / "findings.json").read_text())
+    needles = _working_formulas(working)
+    assert needles
+    pres = (tmp_path / "report.presentation.html").read_text(encoding="utf-8")
+    for formula in needles:
+        assert formula not in pres
+    for name in ("report.presentation.html", "report.working.html"):
+        html = (tmp_path / name).read_text(encoding="utf-8")
+        assert "http://" not in html and "https://" not in html
+        assert "<link" not in html and "<script src" not in html
+        _embedded_payload(html)
+
+
+def test_framing_light_preserves_contract_keys(tmp_path):
+    # A render flag, not a new artifact shape: the top-level key set and the
+    # no-composite-score invariant hold exactly as in full framing, and the flag
+    # rides inside meta (never as a new top-level key).
+    _emit("median", tmp_path, framing="light")
+    findings = json.loads((tmp_path / "findings.json").read_text())
+    assert set(findings.keys()) == _FINDINGS_KEYS
+    assert findings["meta"]["framing"] == "light"
+    pres = (tmp_path / "report.presentation.html").read_text(encoding="utf-8")
+    payload = _embedded_payload(pres)
+    assert set(payload.keys()) == _FINDINGS_KEYS
+    assert payload["meta"]["framing"] == "light"
+
+
+def test_framing_light_recorded_in_run_log(tmp_path):
+    _emit("median", tmp_path, framing="light")
+    assert "framing=light" in (tmp_path / "run.log").read_text()
+
+
+def test_emit_rejects_unknown_framing(tmp_path):
+    store, _config = _scored_store("median")
+    with pytest.raises(ValueError):
+        emit_all(store, "r", str(tmp_path), framing="ladder")
+
+
+# -- R5: multi-run comparison ------------------------------------------------
+# Two findings.json of one account over time. The versioned query set is why a
+# moved number can be attributed to an estate change vs a definition change.
+
+def _two_runs():
+    store, _config = _scored_store("median")
+    baseline = build_findings(store, "r")
+    current = copy.deepcopy(baseline)
+    # A later run of the same site, same query set: one estate number moved.
+    current["meta"]["run_id"] = "r2"
+    rt = current["findings"]["retirement"]
+    rt["zero_view_workbooks"] = rt.get("zero_view_workbooks", 0) + 3
+    return baseline, current
+
+
+def test_comparison_flags_a_moved_number_as_estate_change():
+    baseline, current = _two_runs()
+    delta = compare_runs(baseline, current)
+    assert delta["comparable"] is True
+    assert delta["warnings"] == []
+    rows = delta["findings"]["retirement"]
+    zvw = next(r for r in rows if r["key"] == "zero_view_workbooks")
+    assert zvw["delta"] == 3
+    md = render_comparison_markdown(delta)
+    assert "Zero-view workbooks" in md
+    assert "+3" in md
+    # No composite score is compared -- the footer says so and no `score` column
+    # is emitted.
+    assert "No composite score is compared" in md
+
+
+def test_comparison_warns_when_query_set_changed():
+    baseline, current = _two_runs()
+    # A changed query set means a moved number may be a changed definition, not a
+    # changed estate: the comparison must say so and stop calling it like-for-like.
+    current["meta"]["query_set_version"] = "v2"
+    delta = compare_runs(baseline, current)
+    assert delta["comparable"] is False
+    assert any("query set" in w for w in delta["warnings"])
+    md = render_comparison_markdown(delta)
+    assert "not a clean like-for-like delta" in md
+    assert "query set changed" in md
+
+
+def test_comparison_warns_when_site_differs():
+    baseline, current = _two_runs()
+    current["meta"]["site_name"] = "a different site"
+    delta = compare_runs(baseline, current)
+    assert delta["comparable"] is False
+    assert any("site differs" in w for w in delta["warnings"])

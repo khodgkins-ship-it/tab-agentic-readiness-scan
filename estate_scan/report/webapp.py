@@ -38,8 +38,8 @@ def webapp_payload(findings):
     fnd = findings.get("findings", {})
     return {
         "meta": {k: meta.get(k) for k in (
-            "run_id", "generated_at", "build", "site_name", "profile",
-            "scan_started_at", "scan_completed_at", "grouping_mode",
+            "run_id", "generated_at", "build", "framing", "site_name",
+            "profile", "scan_started_at", "scan_completed_at", "grouping_mode",
             "adoption_source", "tool_version", "query_set_version",
             "app_template_version")},
         "facets": [_facet(f) for f in findings.get("facets", [])],
@@ -74,25 +74,63 @@ def _dm(dm):
     # type: (dict) -> dict
     return {
         "contested_group_count": dm.get("contested_group_count", 0),
-        "groups": [{
-            "group_id": g.get("group_id"),
-            "label": g.get("label"),
-            "variant_count": g.get("variant_count"),
-            "workbooks_affected": g.get("workbooks_affected"),
-            "disagreeing_variants": g.get("disagreeing_variants"),
-            "variants_covering_80pct_views": g.get("variants_covering_80pct_views"),
-            "dominant": g.get("dominant"),
-            "variants": [_variant(v) for v in g.get("variants", [])],
-        } for g in dm.get("groups", [])],
+        "groups": [_dm_group(g) for g in dm.get("groups", [])],
+    }
+
+
+def _dm_group(g):
+    # type: (dict) -> dict
+    out = {
+        "group_id": g.get("group_id"),
+        "label": g.get("label"),
+        "variant_count": g.get("variant_count"),
+        "workbooks_affected": g.get("workbooks_affected"),
+        "disagreeing_variants": g.get("disagreeing_variants"),
+        "variants_covering_80pct_views": g.get("variants_covering_80pct_views"),
+        "dominant": g.get("dominant"),
+        "variants": [_variant(v) for v in g.get("variants", [])],
+    }
+    # R5: carry the group-level VDS rollup so the app can render the same-period
+    # side-by-side (the single most persuasive element, spec 04 section 4.2).
+    # Absent unless the full-mode `resolve` step ran, so the shape is unchanged
+    # for a scan-only run. Raw values were already redacted by report/redact.py
+    # before this projection, so the presentation payload carries only diffs.
+    if g.get("execution") is not None:
+        out["execution"] = _group_exec(g["execution"])
+    return out
+
+
+def _group_exec(gx):
+    # type: (dict) -> dict
+    pair = gx.get("most_material_pair")
+    return {
+        "period": gx.get("period"),
+        "reference_field": gx.get("reference_field"),
+        "tested": gx.get("tested"),
+        "untested": gx.get("untested"),
+        "executability": gx.get("executability"),
+        "material_disagreement": gx.get("material_disagreement"),
+        "most_material_pair": ({k: pair.get(k) for k in (
+            "reference_field", "reference_value", "variant_field",
+            "variant_value", "abs_diff", "rel_diff", "material")}
+            if pair else None),
     }
 
 
 def _variant(v):
     # type: (dict) -> dict
-    return {k: v.get(k) for k in (
+    out = {k: v.get(k) for k in (
         "field_name", "usage_rank", "view_count", "workbook_count",
         "view_share", "is_dominant", "resolution_status", "resolved_formula",
         "owner", "datasource_name")}
+    # R5: per-variant VDS figure. `value` is already redacted to "[redacted]" in
+    # the presentation build; the executability class, reason, and diffs stay.
+    ex = v.get("execution")
+    if ex is not None:
+        out["execution"] = {k: ex.get(k) for k in (
+            "executability_class", "untested_reason", "is_reference", "period",
+            "context_applied", "value", "abs_diff", "rel_diff", "material")}
+    return out
 
 
 def _security(s):

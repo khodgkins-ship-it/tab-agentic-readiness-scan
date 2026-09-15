@@ -5,7 +5,7 @@
    the register names the binding constraint.
 
    The embedded payload schema (subset of findings.json):
-     meta      {run_id, generated_at, build, site_name, profile,
+     meta      {run_id, generated_at, build, framing, site_name, profile,
                 scan_started_at, scan_completed_at, grouping_mode,
                 adoption_source, tool_version, query_set_version,
                 app_template_version}
@@ -21,9 +21,11 @@
 
   var DATA = JSON.parse(document.getElementById("findings-data").textContent);
 
-  // Conditional-render hook for framing-light mode (build brief section 7).
-  // Left as a hook deliberately: NOT implemented until the field asks for it.
-  var FRAMING_LIGHT = false;
+  // Framing-light mode (report web app spec section 8): an account that rejects
+  // a maturity ladder gets the same findings, coverage, and remediation with no
+  // stage/score language. Driven from meta.framing so the one payload serves
+  // both registers -- there is no second build and no second template.
+  var FRAMING_LIGHT = ((DATA.meta || {}).framing === "light");
 
   var STAGES = {1: "Minimal", 2: "Emerging", 3: "Performing",
                 4: "Optimizing", 5: "Leading", 6: "Autonomous"};
@@ -72,23 +74,38 @@
     addSection("cover", "Cover", function (sec) {
       var m = DATA.meta || {};
       sec.classList.add("cover");
-      sec.appendChild(el("p", {class: "section-kicker", text: "Estate readiness"}));
+      sec.appendChild(el("p", {class: "section-kicker",
+        text: FRAMING_LIGHT ? "Estate scan findings" : "Estate readiness"}));
       sec.appendChild(el("h1", {text: m.site_name || "Tableau estate"}));
       var window_ = (m.scan_started_at || "?") + " – " + (m.scan_completed_at || "?");
       sec.appendChild(el("p", {class: "cover-meta"}, [
         txt("Scanned " + window_ + "  ·  profile: " + (m.profile || "unclassified"))
       ]));
 
-      // Three facts, drawn from the primary decision domain. No synthesis.
-      var d = pickPrimaryDomain();
       var facts = el("div", {class: "facts"});
-      facts.appendChild(fact("Current stage",
-        d ? stageLabel(d.readiness) : "unscored", false));
-      facts.appendChild(fact("Target stage",
-        d ? stageLabel(d.target_stage) : "not declared", false));
-      var binding = d && d.binding_constraints && d.binding_constraints.length
-        ? d.binding_constraints.join(", ") : "none";
-      facts.appendChild(fact("Binding constraint", binding, true));
+      if (FRAMING_LIGHT) {
+        // No stages, no binding constraint: three counts drawn straight from
+        // the findings, so the cover reads as observation, not a rating.
+        var dm = (DATA.findings && DATA.findings.definition_multiplicity) || {};
+        var sx = (DATA.findings && DATA.findings.security_exposure) || {};
+        var rt = (DATA.findings && DATA.findings.retirement) || {};
+        facts.appendChild(fact("Contested metric concepts",
+          num(dm.contested_group_count), false));
+        facts.appendChild(fact("Access rules in the view layer",
+          num(sx.user_context_field_count), false));
+        facts.appendChild(fact("Zero-view workbooks",
+          num(rt.zero_view_workbooks), false));
+      } else {
+        // Three facts, drawn from the primary decision domain. No synthesis.
+        var d = pickPrimaryDomain();
+        facts.appendChild(fact("Current stage",
+          d ? stageLabel(d.readiness) : "unscored", false));
+        facts.appendChild(fact("Target stage",
+          d ? stageLabel(d.target_stage) : "not declared", false));
+        var binding = d && d.binding_constraints && d.binding_constraints.length
+          ? d.binding_constraints.join(", ") : "none";
+        facts.appendChild(fact("Binding constraint", binding, true));
+      }
       sec.appendChild(facts);
 
       // What the scan measured and what it did not -- on the cover on purpose.
@@ -238,6 +255,11 @@
 
   function variantDetail(g) {
     var box = el("div");
+    // The same-period side-by-side (report web app spec section 4.2) -- present
+    // only when the full-mode VDS step executed the variants. Renders the two
+    // figures, their difference, and the material verdict; the raw values are
+    // "[redacted]" in the presentation build and shown in the working build.
+    if (g.execution) box.appendChild(groupExecution(g.execution));
     (g.variants || []).forEach(function (v) {
       var card = el("div", {class: "variant"});
       var head = el("div", {class: "variant-head"});
@@ -267,9 +289,65 @@
         else
           card.appendChild(el("pre", {class: "formula", text: v.resolved_formula}));
       }
+      if (v.execution) card.appendChild(variantExecutionNote(v.execution));
       box.appendChild(card);
     });
     return box;
+  }
+
+  // The group-level VDS rollup: reference field vs the most-material variant,
+  // executed over the same agreed period. Raw values arrive already redacted in
+  // the presentation build, so this never has to decide what to hide.
+  function groupExecution(gx) {
+    var box = el("div", {class: "execution"});
+    box.appendChild(el("div", {class: "execution-head"}, [
+      el("strong", {text: "Executed values"}),
+      txt(gx.period ? " · period " + gx.period : ""),
+      txt(gx.material_disagreement ? " · material disagreement"
+                                   : " · within tolerance")]));
+    var pair = gx.most_material_pair;
+    if (pair) {
+      var grid = el("div", {class: "execution-pair"});
+      grid.appendChild(execCell(pair.reference_field, pair.reference_value,
+        "reference"));
+      grid.appendChild(execCell(pair.variant_field, pair.variant_value,
+        "variant"));
+      box.appendChild(grid);
+      box.appendChild(el("div", {class: "baseline-note", text:
+        "absolute difference " + execValue(pair.abs_diff) + " · relative " +
+        (pair.rel_diff == null ? "—" : pct(pair.rel_diff)) +
+        (pair.material ? " · material" : " · within tolerance")}));
+    } else {
+      box.appendChild(el("p", {class: "baseline-note",
+        text: "No comparable pair was executed for this concept."}));
+    }
+    box.appendChild(el("p", {class: "baseline-note", text:
+      num(gx.tested) + " variant(s) tested, " + num(gx.untested) +
+      " not comparable."}));
+    return box;
+  }
+
+  function execCell(field, value, kind) {
+    return el("div", {class: "execution-cell " + kind}, [
+      el("div", {class: "fact-label", text: field || "?"}),
+      el("div", {class: "fact-value", text: execValue(value)})]);
+  }
+
+  // A number renders formatted; a redaction marker (or an absent value) renders
+  // as-is. Never coerces "[redacted]" through the number formatter.
+  function execValue(v) {
+    if (typeof v === "number") return num(v);
+    return v == null ? "—" : String(v);
+  }
+
+  function variantExecutionNote(ex) {
+    var parts = ["executability: " + (ex.executability_class || "?")];
+    if (ex.untested_reason) parts.push("reason: " + ex.untested_reason);
+    if (ex.period) parts.push("period: " + ex.period);
+    if (ex.value != null) parts.push("value: " + execValue(ex.value));
+    if (ex.rel_diff != null)
+      parts.push("Δ " + pct(ex.rel_diff) + (ex.material ? " (material)" : ""));
+    return el("div", {class: "baseline-note", text: parts.join(" · ")});
   }
 
   // =====================================================================
@@ -435,37 +513,71 @@
   // Remediation and cost to gate
   // =====================================================================
   function renderRemediation() {
-    addSection("remediation", "Remediation", function (sec) {
-      sec.appendChild(el("h2", {text: "Remediation and cost to gate"}));
-      sec.appendChild(el("p", {text:
-        "First moves are the binding constraints below. Effort, owner, and the " +
-        "transition each is charged to are captured with the customer during the " +
-        "engagement — the tool does not synthesize them."}));
-      var ol = el("ol");
-      (DATA.domains || []).forEach(function (d) {
-        (d.binding_constraints || []).forEach(function (id) {
-          ol.appendChild(el("li", {text:
-            "Lift " + id + " to clear the " + d.id + " target (" +
-            stageLabel(d.target_stage) + ")."}));
+    addSection("remediation", FRAMING_LIGHT ? "Where to start" : "Remediation",
+      function (sec) {
+        if (FRAMING_LIGHT) { renderRemediationLight(sec); return; }
+        sec.appendChild(el("h2", {text: "Remediation and cost to gate"}));
+        sec.appendChild(el("p", {text:
+          "First moves are the binding constraints below. Effort, owner, and the " +
+          "transition each is charged to are captured with the customer during the " +
+          "engagement — the tool does not synthesize them."}));
+        var ol = el("ol");
+        (DATA.domains || []).forEach(function (d) {
+          (d.binding_constraints || []).forEach(function (id) {
+            ol.appendChild(el("li", {text:
+              "Lift " + id + " to clear the " + d.id + " target (" +
+              stageLabel(d.target_stage) + ")."}));
+          });
         });
+        var dm = (DATA.findings && DATA.findings.definition_multiplicity) || {};
+        if (dm.contested_group_count)
+          ol.appendChild(el("li", {text:
+            "Adjudicate " + dm.contested_group_count +
+            " contested metric concept(s) — charged once, not per transition."}));
+        if (!ol.childNodes.length)
+          ol.appendChild(el("li", {text: "No binding constraint scored."}));
+        sec.appendChild(ol);
+        sec.appendChild(el("p", {}, [
+          el("strong", {text: "Attribution rule: "}),
+          txt("definition adjudication is charged to a single transition, never " +
+              "double-counted across two.")]));
+        sec.appendChild(el("p", {}, [el("strong", {text: "Out of scope: "}),
+          txt("material-disagreement query execution, permissions sampling, grain " +
+              "and freshness flags, and any write to the Tableau site. Keeping this " +
+              "list visible is what keeps the plan fundable.")]));
       });
-      var dm = (DATA.findings && DATA.findings.definition_multiplicity) || {};
-      if (dm.contested_group_count)
-        ol.appendChild(el("li", {text:
-          "Adjudicate " + dm.contested_group_count +
-          " contested metric concept(s) — charged once, not per transition."}));
-      if (!ol.childNodes.length)
-        ol.appendChild(el("li", {text: "No binding constraint scored."}));
-      sec.appendChild(ol);
-      sec.appendChild(el("p", {}, [
-        el("strong", {text: "Attribution rule: "}),
-        txt("definition adjudication is charged to a single transition, never " +
-            "double-counted across two.")]));
-      sec.appendChild(el("p", {}, [el("strong", {text: "Out of scope: "}),
-        txt("material-disagreement query execution, permissions sampling, grain " +
-            "and freshness flags, and any write to the Tableau site. Keeping this " +
-            "list visible is what keeps the plan fundable.")]));
-    });
+  }
+
+  // Framing-light remediation: the same first moves phrased straight from the
+  // findings, with no stage, target, or transition language.
+  function renderRemediationLight(sec) {
+    sec.appendChild(el("h2", {text: "Where to start"}));
+    sec.appendChild(el("p", {text:
+      "The first moves come straight from the findings above. Effort and owner " +
+      "are captured with the customer during the engagement — the tool does not " +
+      "synthesize them."}));
+    var ol = el("ol");
+    var dm = (DATA.findings && DATA.findings.definition_multiplicity) || {};
+    var sx = (DATA.findings && DATA.findings.security_exposure) || {};
+    var rt = (DATA.findings && DATA.findings.retirement) || {};
+    if (dm.contested_group_count)
+      ol.appendChild(el("li", {text:
+        "Adjudicate " + num(dm.contested_group_count) +
+        " contested metric concept(s) to one agreed definition."}));
+    if (sx.user_context_field_count)
+      ol.appendChild(el("li", {text:
+        "Move " + num(sx.user_context_field_count) + " access rule(s) out of the " +
+        "visualization layer to the data source."}));
+    if (rt.zero_view_workbooks)
+      ol.appendChild(el("li", {text:
+        "Retire " + num(rt.zero_view_workbooks) + " zero-view workbook(s) and " +
+        "consolidate redundant sources to recover capacity."}));
+    if (!ol.childNodes.length)
+      ol.appendChild(el("li", {text: "No findings to act on."}));
+    sec.appendChild(ol);
+    sec.appendChild(el("p", {}, [el("strong", {text: "Out of scope: "}),
+      txt("material-disagreement query execution, permissions sampling, grain " +
+          "and freshness flags, and any write to the Tableau site.")]));
   }
 
   // =====================================================================

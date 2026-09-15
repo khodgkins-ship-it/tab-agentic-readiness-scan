@@ -19,11 +19,18 @@ _STAGE_NAMES = {
 def render_markdown(findings):
     # type: (dict) -> str
     meta = findings.get("meta", {})
+    # Framing-light (report web app spec section 8): present the same findings,
+    # coverage, and evidence with no stage/readiness/score language for accounts
+    # that reject a maturity ladder. It is a render flag on one payload -- the
+    # cover, facet table, and register (the only stage/score-bearing sections)
+    # are simply omitted; the findings and coverage sections carry no ladder
+    # language and render identically either way.
+    light = meta.get("framing") == "light"
     lines = []  # type: List[str]
     a = lines.append
 
     build = meta.get("build", "working")
-    a("# Tableau Estate Readiness")
+    a("# Tableau Estate Scan" if light else "# Tableau Estate Readiness")
     a("")
     if build == "working":
         a("> **Working build.** Contains business logic (resolved formulas) "
@@ -42,18 +49,24 @@ def render_markdown(findings):
       % (meta.get("grouping_mode"), meta.get("adoption_source")))
     a("")
 
-    _cover(a, findings)
+    if not light:
+        _cover(a, findings)
     _finding_definitions(a, findings, build)
     _finding_security(a, findings)
     _finding_retirement(a, findings)
-    _dimensions(a, findings)
-    _register(a, findings)
+    if not light:
+        _dimensions(a, findings)
+        _register(a, findings)
     _coverage(a, findings)
 
     a("")
     a("---")
-    a("_No composite maturity score is emitted. Readiness is the binding "
-      "constraint per domain; averaging would hide it._")
+    if light:
+        a("_Findings-only build. The figures above are drawn directly from the "
+          "scan of the estate; no ranking or rating is applied._")
+    else:
+        a("_No composite maturity score is emitted. Readiness is the binding "
+          "constraint per domain; averaging would hide it._")
     a("")
     return "\n".join(lines)
 
