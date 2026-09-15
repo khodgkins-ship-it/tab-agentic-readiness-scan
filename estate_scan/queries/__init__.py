@@ -10,6 +10,8 @@ import hashlib
 import json
 import os
 
+from estate_scan.readonly import assert_graphql_read_only
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _MANIFEST_PATH = os.path.join(_HERE, "manifest.json")
 
@@ -53,6 +55,20 @@ def load_query(name, verify=True):
                 % (name, entry["sha256"], actual))
     with open(path, "r") as fh:
         return fh.read()
+
+
+def assert_read_only(name):
+    # type: (str) -> None
+    """Gate A: verify the named query is a read.
+
+    Loads the (checksum-verified) query text and refuses it unless every
+    operation is a `query` -- a `mutation`/`subscription` raises
+    `ReadOnlyViolation`. Editing a .graphql file into a mutation trips this
+    *and* forces a visible manifest checksum diff: two independent hard
+    failures. Called by the live client before every GraphQL request.
+    """
+    text = load_query(name, verify=True)
+    assert_graphql_read_only(text, label="query %r" % name)
 
 
 def shard_hint(name):

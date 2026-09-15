@@ -12,10 +12,18 @@ pipeline is `scan | interview | score | report` with no in-memory hand-off.
 `scan` resolves the run id and `interview`/`score`/`report` pick up the most
 recent run in the store, so the common single-run case needs no id plumbing.
 
-The prototype is fixture-driven and offline: `scan` reads a recorded estate
-through ``clients/fixture.py`` and never touches a live site. The live clients
-(``clients/rest.py``, ``clients/graphql.py``) satisfy the same interface and
-land in M7; read-only enforcement and the config secret check live with them.
+`scan` runs in one of two modes against the same downstream pipeline:
+
+  * ``--fixture PATH``  -- offline replay of a recorded estate (never a network).
+  * ``--config PATH``   -- a real Tableau site (Cloud or Server) via ``LiveClient``.
+
+The live mode is deliberately two-step. ``--config`` alone loads the file, runs
+the secret-hygiene abort (``security.assert_no_secrets_in_config``) *before any
+client is constructed*, and validates the shape -- but does not connect.
+Connecting requires the explicit ``--live`` opt-in, so pointing ``scan`` at a
+config to check it can never silently reach out to a real site. Read-only is
+enforced in code by the live client's three gates, and credentials come only
+from the environment or the OS keychain, never the config file.
 """
 
 import argparse
@@ -79,10 +87,56 @@ def _fixture_path(path):
     return path
 
 
+def _load_live_config(path):
+    # type: (str) -> dict
+    """Load, secret-scan, and validate a live-run config.
+
+    The secret scan runs BEFORE any client is constructed and hard-aborts
+    (`SystemExit`) if a PAT/secret was put in the config instead of the
+    environment/keychain -- it names the offending key but never the value.
+    """
+    from estate_scan.config import load_config, validate_config
+    from estate_scan.security import assert_no_secrets_in_config
+    config = load_config(path)
+    assert_no_secrets_in_config(config)   # hard-abort on a planted secret
+    validate_config(config)               # shape the live client needs
+    return config
+
+
+def _scan_client(args):
+    # type: (argparse.Namespace) -> object
+    """Build the scan client for the selected mode. For `--live`, secret hygiene
+    is enforced and the version negotiation + sign-in happen here (the runner
+    reads `site_id`/`run_config()` at the top of `run()`)."""
+    if args.config:
+        from estate_scan.clients.auth import AuthError
+        from estate_scan.clients.live import LiveClient
+        config = _load_live_config(args.config)
+        client = LiveClient(config)
+        try:
+            client.connect()
+        except AuthError as exc:
+            client.close()
+            raise SystemExit("estate-scan: %s" % exc)
+        return client
+    return FixtureClient.from_path(_fixture_path(args.fixture))
+
+
 def cmd_scan(args):
     # type: (argparse.Namespace) -> int
+    if args.live and not args.config:
+        raise SystemExit("scan: --live applies to a live run; it requires --config")
+    if args.config and not args.live:
+        # Dry validation only: check the config without connecting anywhere.
+        _load_live_config(args.config)
+        print("config %s is valid. Re-run with --live to connect and scan."
+              % args.config)
+        print("  credentials come from ESTATE_SCAN_PAT_NAME / "
+              "ESTATE_SCAN_PAT_SECRET or the OS keychain, never the config file.")
+        return 0
+
     store = _open_store(args.out, fresh=True)
-    client = FixtureClient.from_path(_fixture_path(args.fixture))
+    client = _scan_client(args)
     config = client.run_config()
     run_id = new_run_id()
 
@@ -201,9 +255,16 @@ def build_parser():
     sub = parser.add_subparsers(dest="command")
 
     p_scan = sub.add_parser(
-        "scan", help="extract, derive, and flag a recorded estate")
-    p_scan.add_argument("--fixture", required=True,
-                        help="path to a recorded estate.json")
+        "scan", help="extract, derive, and flag an estate (fixture or live)")
+    src = p_scan.add_mutually_exclusive_group(required=True)
+    src.add_argument("--fixture",
+                     help="path to a recorded estate.json (offline replay)")
+    src.add_argument("--config",
+                     help="path to a live-run config (YAML/JSON) for a real "
+                          "Tableau Cloud/Server site")
+    p_scan.add_argument("--live", action="store_true",
+                        help="with --config, actually connect and scan; without "
+                             "it, --config only validates the config")
     p_scan.add_argument("--out", required=True,
                         help="output directory (holds estate.db and run.log)")
     p_scan.set_defaults(func=cmd_scan)

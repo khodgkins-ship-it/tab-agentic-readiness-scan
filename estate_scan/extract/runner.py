@@ -113,7 +113,12 @@ class ExtractRunner(object):
         # 5. REST usage events (served by the fixture; live source deferred).
         self._run_usage_events()
 
-        # 6. Deferred measures -> skipped, so nothing reads as clean.
+        # 6. Coverage limitations the client discovered at runtime (e.g. owner
+        # attribution gaps on Server). Additive and backend-agnostic -- the
+        # fixture client has no such notes.
+        self._record_client_notes()
+
+        # 7. Deferred measures -> skipped, so nothing reads as clean.
         for measure, reason in _DEFERRED_MEASURES:
             self.store.record_coverage(self.run_id, measure, "skipped", reason)
 
@@ -173,6 +178,15 @@ class ExtractRunner(object):
         self.store.record_coverage(self.run_id, "usage_events", "ok",
                                    "%d events" % len(res.items))
         self._log("usage_events: loaded %d events" % len(res.items))
+
+    # -- client-discovered coverage -----------------------------------------
+    def _record_client_notes(self):
+        # type: () -> None
+        notes = getattr(self.client, "coverage_notes", None)
+        if not callable(notes):
+            return
+        for measure, status, reason in notes():
+            self.store.record_coverage(self.run_id, measure, status, reason)
 
     # -- resume --------------------------------------------------------------
     def _restore(self, shard):
