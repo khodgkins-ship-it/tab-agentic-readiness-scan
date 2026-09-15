@@ -25,7 +25,8 @@ from estate_scan.extract.runner import ExtractRunner
 from estate_scan.flags.engine import evaluate_flags
 from estate_scan.score import score
 from estate_scan.score.facets import score_capped, score_threshold
-from estate_scan.score.rollup import governance_score
+from estate_scan.score.rollup import (domain_rollup, governance_binding,
+                                      governance_score)
 from estate_scan.store import Store
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
@@ -57,12 +58,15 @@ def test_target_five_yields_readiness_two_with_singularity_binding():
     findings = score(store, "r", config=config)  # median declares target 5
 
     facets = _facet_scores(findings)
-    # The prototype scores the semantic and adoption facets from the scan.
+    # R4 scores the semantic, adoption, and data facets from the scan.
     assert facets["semantic.singularity"]["score"] == 2
     assert facets["semantic.singularity"]["confidence"] == "observed"
     assert facets["semantic.describability"]["score"] == 3
     assert facets["semantic.exposure_shape"]["score"] == 2
     assert facets["adoption.reach"]["score"] == 4
+    # data.entitlement_at_source: base 6 capped to 2 because SEC-01 fires.
+    assert facets["data.entitlement_at_source"]["score"] == 2
+    assert facets["data.entitlement_at_source"]["confidence"] == "observed"
 
     assert len(findings["domains"]) == 1
     dom = findings["domains"][0]
@@ -70,8 +74,11 @@ def test_target_five_yields_readiness_two_with_singularity_binding():
     assert dom["target_stage"] == 5
     assert dom["readiness"] == 2
     assert dom["gap"] == 3
-    assert dom["binding_constraints"] == ["semantic.singularity"]
-    assert dom["dimension_scores"] == {"semantic": 2}
+    # Data now gates stage 5 too and ties semantic at the minimum, so both are
+    # named as binding constraints.
+    assert dom["binding_constraints"] == ["data.entitlement_at_source",
+                                          "semantic.singularity"]
+    assert dom["dimension_scores"] == {"data": 2, "semantic": 2}
     assert dom["confidence"] == "observed"
 
 
@@ -225,6 +232,76 @@ def test_governance_capped_by_the_weakest_active_arc():
     assert governance_score(scores, ARCS, 5) == 4
 
 
+# -- unit: governance binding constraint (the R4 fix) ------------------------
+
+def test_governance_binding_names_the_arc_that_holds_the_loop():
+    # Companion to the score: corrective lags at 2, so the loop closes at 4 and
+    # the arc that stops it closing at 5 is corrective.
+    scores = {"preventive": 5, "accountability": 5, "detective": 5,
+              "assurance": 5, "corrective": 2}
+    gov = governance_score(scores, ARCS, 5)
+    assert gov == 4
+    assert governance_binding(scores, ARCS, gov) == ["governance.corrective"]
+
+
+def test_governance_binding_empty_when_unscored_or_at_ceiling():
+    # No arc measured -> no binding (governance is unscored, not bound).
+    assert governance_binding({}, ARCS, None) == []
+    # Loop already closed at the ceiling -> nothing above it can fail.
+    full = {"preventive": 6, "accountability": 6, "detective": 6,
+            "assurance": 6, "corrective": 6}
+    assert governance_binding(full, ARCS, 6) == []
+
+
+def test_domain_rollup_names_the_failing_governance_arc():
+    # The confirmed defect: when governance is the sole minimum the register
+    # used to name no constraint at all (binding_by_dim skipped governance) and
+    # report "observed" confidence -- a low readiness with no cause. The arc's
+    # facet record is interview-derived (evidence "reported"), so the domain
+    # must read "reported".
+    facets = [
+        {"id": "semantic.singularity", "dimension": "semantic", "score": 5,
+         "evidence": "observed", "gates": [5]},
+        {"id": "governance.corrective", "dimension": "governance", "score": 2,
+         "evidence": "reported", "gates": []},
+    ]
+    dim_scores = {"semantic": {"score": 5,
+                               "gating_facets": ["semantic.singularity"]}}
+    scores = {"preventive": 5, "accountability": 5, "detective": 5,
+              "assurance": 5, "corrective": 2}
+    gov = governance_score(scores, ARCS, 5)            # loop closes at 4
+    gov_binding = governance_binding(scores, ARCS, gov)
+    dom = domain_rollup({"id": "d", "target_stage": 5}, facets, dim_scores,
+                        gov, gov_binding)
+
+    assert dom["readiness"] == 4
+    assert dom["dimension_scores"] == {"governance": 4, "semantic": 5}
+    assert dom["binding_constraints"] == ["governance.corrective"]
+    assert dom["confidence"] == "reported"
+
+
+def test_interview_arc_scores_make_governance_the_binding_constraint():
+    # End to end through the scorer: a single governance arc placed below its
+    # stage-2 tier drops the governance loop to 1 -- below the scan's semantic
+    # floor of 2 -- so governance becomes the binding dimension and names its
+    # arc, with confidence "reported" because the floor is interview-derived.
+    store, config = _scored_store("median")
+    arcs = {"preventive": 1, "accountability": 5, "detective": 5,
+            "assurance": 5, "corrective": 5}
+    for arc, sc in arcs.items():
+        store.save_interview_response(
+            "r", "governance.%s" % arc, sc, "arc %s" % arc, "governance_lead",
+            "", "2026-01-01T00:00:00Z", "specialist", "reported")
+    store.commit()
+
+    findings = score(store, "r", config=config, now="2026-01-01T00:00:00Z")
+    dom = findings["domains"][0]
+    assert dom["readiness"] == 1
+    assert dom["dimension_scores"].get("governance") == 1
+    assert dom["binding_constraints"] == ["governance.preventive"]
+    assert dom["confidence"] == "reported"
+
+
 # -- the four-subcommand CLI shape -------------------------------------------
 
 def test_cli_pipeline_scan_interview_score(tmp_path):
@@ -245,7 +322,8 @@ def test_cli_pipeline_scan_interview_score(tmp_path):
     store.close()
     dom = findings["domains"][0]
     assert dom["readiness"] == 2
-    assert dom["binding_constraints"] == ["semantic.singularity"]
+    assert dom["binding_constraints"] == ["data.entitlement_at_source",
+                                          "semantic.singularity"]
 
     # --no-rollup drops the domain rollup
     assert cli.main(["score", "--out", out, "--no-rollup"]) == 0

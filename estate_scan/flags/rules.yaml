@@ -50,9 +50,16 @@ flags:
     facet: governance.preventive
     feeds: security_finding
     rule: permissive_grants
-    threshold: {}
+    # Permissive = an Allow of a sensitive capability to a broad "everyone"
+    # grantee. Both lists live here so firing is retuned without a code edit and
+    # without tuning against the fixture (build brief 7) -- the firing path is
+    # proven by a threshold-flip unit test, not by shaping the fixture.
+    threshold:
+      everyone_grantees: [AllUsers]
+      sensitive_capabilities: [Write, Delete, ChangePermissions, ProjectLeader]
+      min_count: 1
     scope: estate
-    implemented: false
+    implemented: true
 
   # -- semantic -----------------------------------------------------------
   SEM-01:
@@ -93,7 +100,7 @@ flags:
     rule: datasource_field_count
     threshold: {max_field_count: 300}
     scope: estate
-    implemented: false
+    implemented: true
 
   # -- data foundation ----------------------------------------------------
   DF-01:
@@ -132,19 +139,24 @@ flags:
     facet: data.provenance
     feeds: null
     rule: source_without_upstream
-    threshold: {}
+    threshold: {min_count: 1}
     scope: estate
-    implemented: false
+    implemented: true
 
   DF-05:
     severity: critical
     confidence: observed
     facet: data.freshness
     feeds: security_finding
-    rule: stale_refresh_recent_view
-    threshold: {stale_multiple: 2.0, viewed_within_days: 30}
+    rule: failed_refresh_recent_view
+    # A source whose LATEST refresh failed while a published workbook built on it
+    # was viewed within `viewed_within_days` days: broken/stale data is reaching
+    # users. `stale_multiple` was dropped -- with one refresh row per source the
+    # scan has no cadence to compute a staleness multiple against, so the
+    # failed-latest-refresh signal is what the extract can actually observe.
+    threshold: {viewed_within_days: 30, min_count: 1}
     scope: estate
-    implemented: false
+    implemented: true
 
   DF-06:
     severity: warning
@@ -154,7 +166,7 @@ flags:
     rule: refresh_failure_rate
     threshold: {max_failure_rate: 0.10}
     scope: estate
-    implemented: false
+    implemented: true
 
   DF-07:
     severity: warning
@@ -162,9 +174,9 @@ flags:
     facet: data.retained_grain
     feeds: null
     rule: custom_sql_grain_loss
-    threshold: {}
+    threshold: {min_count: 1}
     scope: estate
-    implemented: false
+    implemented: true
     suppress: true   # noisy on large estates (build spec section 8)
 
   # -- governance ---------------------------------------------------------
@@ -174,9 +186,9 @@ flags:
     facet: governance.accountability
     feeds: null
     rule: source_owner_missing
-    threshold: {}
+    threshold: {min_count: 1}
     scope: estate
-    implemented: false
+    implemented: true
 
   GOV-02:
     severity: informational
@@ -184,6 +196,34 @@ flags:
     facet: data.integrity
     feeds: null
     rule: no_data_quality_warnings
+    threshold: {}
+    scope: estate
+    # Deferred honestly: the data-quality-warning (DQW) feed is not extracted
+    # yet, so there is no signal to read. Left unimplemented rather than reading
+    # a missing feed as "no warnings" -- absence of extraction is not health.
+    implemented: false
+
+  # REST<->Metadata description divergence (05 section 5). Needs the REST
+  # field-description read alongside the Metadata one to compare the two; the
+  # REST side is not extracted yet, so this stays defined-but-unimplemented.
+  SEM-05:
+    severity: informational
+    confidence: observed
+    facet: semantic.describability
+    feeds: null
+    rule: rest_metadata_description_divergence
+    threshold: {}
+    scope: estate
+    implemented: false
+
+  # Certification / DQW divergence (05 section 5). Needs the DQW feed to
+  # cross-check against certification; DQW is not extracted yet.
+  GOV-03:
+    severity: warning
+    confidence: observed
+    facet: governance.detective
+    feeds: null
+    rule: certification_dqw_divergence
     threshold: {}
     scope: estate
     implemented: false
@@ -207,6 +247,8 @@ flags:
     rule: business_rule_editors
     threshold: {}
     scope: estate
+    # Deferred honestly: "business rule editors" (who edits shared logic) is not
+    # modelled in the estate yet -- no editor/authorship signal is extracted.
     implemented: false
     suppress: true   # noisy on large estates (build spec section 8)
 
@@ -218,6 +260,10 @@ flags:
     rule: active_user_penetration
     threshold: {min_penetration: 0.30}
     scope: estate
+    # Deferred honestly: a penetration ratio needs a licensed-user denominator
+    # the scan does not have. usage_events carry viewers, not the licensed
+    # population, so a ratio would be computed against the wrong base and read
+    # as falsely healthy. Implemented once the licensed-user count is extracted.
     implemented: false
 
   ADO-02:
@@ -322,22 +368,28 @@ facets:
     scored: false
     gates: [4, 5]
 
-  # -- data (defined, unscored in the prototype) --------------------------
-  # Kept unscored per build brief M6, but carries the cap block so the
-  # flag-capped path is exercised (see tests/test_score.py). Scoring it would
-  # cap the data dimension at 2 and tie the binding constraint; the prototype
-  # leaves it out of the rollup deliberately.
+  # -- data (entitlement scored in R4) ------------------------------------
+  # Flag-capped: base 6, pulled to 2 when SEC-01 fires (a user-context function
+  # baked into a formula leaks a row-level-security decision into the modelled
+  # layer). Scored in R4 so the data dimension produces a real score instead of
+  # reading as unscored; on an estate where SEC-01 fires it ties semantic as a
+  # binding constraint at the stage-5 gate.
   data.entitlement_at_source:
     dimension: data
     evidence: observed
-    scored: false
+    scored: true
     base: 6
     caps:
       - flag: SEC-01
-        when: "count > 0"
+        when: "> 0"
         max_score: 2
     gates: [5]
 
+  # Provenance stays unscored: DF-02/03/04 flag its failure modes, but there is
+  # no single ordered measure to band it against yet (a real provenance score
+  # needs lineage-completeness calibration from live estates, R6). The data
+  # dimension is carried by entitlement above; provenance reports as unscored,
+  # never as clean.
   data.provenance:
     dimension: data
     evidence: derived

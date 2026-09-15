@@ -920,6 +920,52 @@ def measure(estate):
     no_upstream = sum(1 for d in dss
                       if not d.get("upstreamTables") and not d.get("upstreamDatasources"))
 
+    # SEM-04: widest source by field count
+    max_fields = max((len(d["fields"]) for d in dss), default=0)
+
+    # GOV-01: published sources with no owner username
+    missing_owner = sum(1 for d in dss if not (d.get("owner") or {}).get("username"))
+
+    # SEC-02: permissive grants (Allow of a sensitive capability to an "everyone"
+    # group). Computed here exactly as the store evaluator does, so flags_expected
+    # agrees with firing without tuning the threshold to the fixture.
+    perms = estate.get("permissions", [])
+    _EVERYONE = {"AllUsers"}
+    _SENSITIVE = {"Write", "Delete", "ChangePermissions", "ProjectLeader"}
+    sec02 = sum(1 for p in perms
+                if p.get("mode") == "Allow"
+                and p.get("grantee_id") in _EVERYONE
+                and p.get("capability") in _SENSITIVE)
+
+    # DF-05: a source whose LATEST refresh failed while a published workbook built
+    # on it was viewed within the window. Mirrors store.failed_source_recent_views
+    # + the evaluator's 30-day filter, so the fixture ground truth and the loaded
+    # store agree. One refresh row per source here, so latest == that row.
+    rj = estate.get("refresh_jobs", [])
+    latest_by_ds = {}  # type: Dict[str, dict]
+    for j in rj:
+        d = j.get("datasource_id")
+        cur = latest_by_ds.get(d)
+        if cur is None or (j.get("completed_at") or "") > (cur.get("completed_at") or ""):
+            latest_by_ds[d] = j
+    failed_sources = {d for d, j in latest_by_ds.items() if j.get("status") == "Failed"}
+    wb_last_viewed = {u["workbook_id"]: u.get("last_viewed_days_ago")
+                      for u in estate["usage_events"]
+                      if u.get("last_viewed_days_ago") is not None}
+    pub_wbs_by_ds = {}  # type: Dict[str, set]
+    for w in estate["workbooks"]:
+        for up in w.get("upstreamDatasources", []):
+            pub_wbs_by_ds.setdefault(up["id"], set()).add(w["id"])
+    DF05_WINDOW = 30
+    df05_sources = set()
+    for d in failed_sources:
+        for wid in pub_wbs_by_ds.get(d, ()):
+            lvd = wb_last_viewed.get(wid)
+            if lvd is not None and lvd <= DF05_WINDOW:
+                df05_sources.add(d)
+                break
+    df05_count = len(df05_sources)
+
     manifest = {
         "profile": estate["meta"]["profile"],
         "seed": estate["meta"]["seed"],
@@ -931,6 +977,7 @@ def measure(estate):
             "workbooks": len(estate["workbooks"]),
             "fields_total": len(all_fields),
             "calculated_fields": len(calc_fields),
+            "max_fields_per_datasource": max_fields,
         },
         "metric_groups": groups,
         "core_metrics": core,
@@ -952,6 +999,7 @@ def measure(estate):
             "max_sources_per_upstream_table": max_sources_per_table,
             "max_published_on_published_depth": max_ds_depth,
             "sources_without_upstream": no_upstream,
+            "sources_missing_owner": missing_owner,
         },
         "flags_expected": {},
     }
@@ -971,6 +1019,7 @@ def measure(estate):
     manifest["refresh_jobs"] = {
         "count": len(rj),
         "failed": sum(1 for j in rj if j.get("status") == "Failed"),
+        "failed_source_recent_views": df05_count,
     }
     manifest["permissions"] = {
         "count": len(perms),
@@ -1000,6 +1049,18 @@ def measure(estate):
     fe["ADO-02"] = {"fires": True,
                     "workbooks_covering_80pct_views":
                         manifest["view_concentration"]["workbooks_covering_80pct_views"]}
+    # R4 flag set. Firing derives from the fixture ground truth above, never from
+    # a threshold shaped to the fixture. DF-07 is suppressed (never written) so it
+    # is deliberately absent here and asserted via the suppressed log instead.
+    rj_total = len(rj)
+    rj_failed = manifest["refresh_jobs"]["failed"]
+    fe["SEC-02"] = {"fires": sec02 >= 1, "count": sec02}
+    fe["SEM-04"] = {"fires": max_fields > 300, "max_field_count": max_fields}
+    fe["DF-04"] = {"fires": no_upstream > 0, "count": no_upstream}
+    fe["DF-05"] = {"fires": df05_count > 0, "count": df05_count}
+    fe["DF-06"] = {"fires": (rj_failed / rj_total) > 0.10 if rj_total else False,
+                   "count": rj_failed}
+    fe["GOV-01"] = {"fires": missing_owner > 0, "count": missing_owner}
     return manifest
 
 

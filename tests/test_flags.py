@@ -102,6 +102,12 @@ def test_prototype_flags_match_manifest():
     assert (rows["ADO-02"][1]["workbooks_covering_80pct_views"]
             == expected["ADO-02"]["workbooks_covering_80pct_views"] == 106)
 
+    # R4 data-foundation flags fire on the median estate; their counts match the
+    # fixture ground truth (computed in generate.py, not tuned to a threshold).
+    assert rows["DF-04"][0]["count"] == expected["DF-04"]["count"]
+    assert rows["DF-05"][0]["count"] == expected["DF-05"]["count"]
+    assert rows["DF-06"][0]["count"] == expected["DF-06"]["count"]
+
 
 def test_catalog_is_complete_and_unimplemented_flags_are_defined_not_evaluated():
     # The file is the complete catalog from day one: flags marked
@@ -166,6 +172,47 @@ def test_lowering_a_threshold_can_make_a_silent_flag_fire(tmp_path):
     after = evaluate_flags(store, "r", rules_path=str(alt),
                            now="2026-01-01T00:00:00Z")
     assert "SEM-03" in {f["flag"] for f in after["fired"]}
+
+
+# -- R4: firing proven by the rules file, not by shaping the fixture ----------
+
+def test_sec02_fires_when_everyone_grantee_list_widens(tmp_path):
+    store = _store("median")
+
+    # Shipped rules: AllUsers holds only [Read], so SEC-02 is silent -- and the
+    # fixture is NOT shaped to make it fire (build brief 7).
+    base = evaluate_flags(store, "r", now="2026-01-01T00:00:00Z")
+    assert "SEC-02" not in {f["flag"] for f in base["fired"]}
+
+    # Treat Analysts as an "everyone" group too. Analysts holds [Read, Write]
+    # Allow at every project, so the Write grant now reads as permissive -- the
+    # firing path is proven purely from the rules file, no code or fixture edit.
+    rules = load_rules()
+    rules["flags"]["SEC-02"]["threshold"]["everyone_grantees"] = \
+        ["AllUsers", "Analysts"]
+    alt = tmp_path / "rules.yaml"
+    alt.write_text(yaml.safe_dump(rules))
+    after = evaluate_flags(store, "r", rules_path=str(alt),
+                           now="2026-01-01T00:00:00Z")
+    fired = {f["flag"] for f in after["fired"]}
+    assert "SEC-02" in fired
+    assert "SEC-02" in _by_flag(store)
+
+
+def test_df07_grain_flag_is_suppressed_but_evaluated():
+    store = _store("median")
+    summary = evaluate_flags(store, "r", now="2026-01-01T00:00:00Z")
+
+    # DF-07 is implemented but suppressed: never written and never in
+    # flags_expected, but still evaluated so the log can say it WOULD fire and
+    # how many custom-SQL grain risks it hid.
+    assert "DF-07" not in _by_flag(store)
+    assert "DF-07" not in {f["flag"] for f in summary["fired"]}
+    suppressed = {s["flag"]: s for s in summary["suppressed"]}
+    assert "DF-07" in suppressed
+    assert suppressed["DF-07"]["would_fire"] is True
+    manifest = _manifest("median")
+    assert suppressed["DF-07"]["count"] == manifest["custom_sql"]["with_group_by"]
 
 
 # -- acceptance: suppressions appear in the run log ---------------------------

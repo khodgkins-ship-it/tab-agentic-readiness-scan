@@ -57,13 +57,41 @@ def governance_score(arc_scores, arcs_def, target_stage):
     return 1
 
 
-def domain_rollup(domain, facets, dim_scores, gov_score):
-    # type: (dict, List[dict], Dict[str, dict], Optional[int]) -> dict
+def governance_binding(arc_scores, arcs_def, gov_score):
+    # type: (Dict[str, int], dict, Optional[int]) -> List[str]
+    """The arcs that hold governance at `gov_score` -- the arcs active at the
+    next stage up whose tier falls short of closing it. Named `governance.<arc>`
+    to match the facet-id convention the register's binding constraints use.
+
+    Companion to `governance_score` (whose int/None return the unit tests pin
+    down): the score says how high the loop closes; this says *what* stops it
+    closing higher, so a governance-bound domain names its failing arc rather
+    than reporting a low readiness with no cause. Empty when governance is
+    unscored (no arc inputs) or already closed at the ceiling (nothing above to
+    fail)."""
+    if gov_score is None:
+        return []
+    nxt = gov_score + 1
+    if nxt > 6:
+        return []
+    active = [a for a, spec in arcs_def.items()
+              if nxt >= spec.get("activates_at", 2)]
+    short = [a for a in active if arc_scores.get(a, 0) < nxt]
+    return sorted("governance.%s" % a for a in short)
+
+
+def domain_rollup(domain, facets, dim_scores, gov_score, gov_binding=None):
+    # type: (dict, List[dict], Dict[str, dict], Optional[int], Optional[List[str]]) -> dict
     """Assemble one domain's readiness register (build spec 9.4/9.6).
 
     readiness = min across scored dimensions. binding_constraints = every facet
     at that minimum (ties are emitted in full, since two simultaneous
-    constraints change the remediation plan). No composite, no average."""
+    constraints change the remediation plan). No composite, no average.
+
+    Governance does not roll up by minimum, so it carries no gating facets; when
+    it is the binding dimension its constraint is the arc(s) that fail to close
+    the loop (`gov_binding`, from `governance_binding`), named `governance.<arc>`
+    -- without this a governance-bound domain named no constraint at all."""
     target = domain["target_stage"]
 
     scored = {}  # type: Dict[str, int]
@@ -73,6 +101,7 @@ def domain_rollup(domain, facets, dim_scores, gov_score):
         binding_by_dim[dim] = info["gating_facets"]
     if gov_score is not None:
         scored[GOVERNANCE] = gov_score
+        binding_by_dim[GOVERNANCE] = gov_binding or []
 
     unscored = sorted(d for d in DIMENSIONS if d not in scored)
 
@@ -103,14 +132,18 @@ def domain_rollup(domain, facets, dim_scores, gov_score):
 
 def _domain_confidence(facets, binding):
     # type: (List[dict], List[str]) -> str
-    """observed when every gating facet came from the scan; mixed when any came
-    from an interview; reported when the binding constraint itself is
-    interview-derived (build spec 9.6)."""
+    """reported when the binding constraint itself is interview-derived; mixed
+    when the binding is observed but some other facet in the domain is
+    interview-derived; observed when everything the domain rests on came from
+    the scan (build spec 9.6).
+
+    A governance arc named as a binding constraint (`governance.<arc>`) resolves
+    through the interview-only facet the scorer records for that arc, so an
+    interview-derived governance floor reports `reported` with no special case
+    here."""
     ev = {f["id"]: f.get("evidence", "observed") for f in facets}
-    if any(ev.get(b) in ("reported", "interview") for b in binding):
+    if any(ev.get(b, "observed") in ("reported", "interview") for b in binding):
         return "reported"
-    gating_ev = [f.get("evidence", "observed") for f in facets
-                 if f["id"] in binding]
-    if any(e in ("reported", "interview") for e in gating_ev):
+    if any(e in ("reported", "interview") for e in ev.values()):
         return "mixed"
     return "observed"

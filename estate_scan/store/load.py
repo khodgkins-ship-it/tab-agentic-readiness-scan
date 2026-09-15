@@ -618,6 +618,111 @@ class Store(object):
             (run_id,))
         return [row["v"] for row in cur.fetchall()]
 
+    # -- R4 flag measures ---------------------------------------------------
+    # Same contract as the M5 measures above: return raw values only. Every
+    # threshold and firing decision lives in the flag engine / rules.yaml so the
+    # field team tunes firing with no code edit.
+
+    def permission_grants(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        """Every recorded permission grant (SEC-02). The evaluator decides which
+        grantee/capability/mode combinations are permissive, so the notion of
+        'everyone' and 'sensitive' stays in rules.yaml."""
+        cur = self.conn.execute(
+            "SELECT object_type, object_id, grantee_type, grantee_id, "
+            "       capability, mode "
+            "FROM permissions WHERE run_id=? "
+            "ORDER BY object_type, object_id, grantee_type, grantee_id, capability",
+            (run_id,))
+        return cur.fetchall()
+
+    def datasource_field_counts(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        """Per-datasource field count from the fields table (SEM-04). Counting
+        stored field rows is more robust than the `field_count` column, which is
+        null when a shard did not carry fieldsConnection.totalCount."""
+        cur = self.conn.execute(
+            "SELECT datasource_id, COUNT(*) AS n FROM fields WHERE run_id=? "
+            "GROUP BY datasource_id ORDER BY datasource_id", (run_id,))
+        return cur.fetchall()
+
+    def datasources_without_upstream(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        """Published sources with no upstream lineage at all -- neither a
+        physical table nor another published source (DF-04). A source that
+        traces to nothing has unprovable provenance."""
+        cur = self.conn.execute(
+            "SELECT d.id AS id, d.name AS name FROM datasources d "
+            "WHERE d.run_id=? AND NOT EXISTS ("
+            "  SELECT 1 FROM lineage l WHERE l.run_id=d.run_id "
+            "  AND l.downstream_type='datasource' AND l.downstream_id=d.id) "
+            "ORDER BY d.id", (run_id,))
+        return cur.fetchall()
+
+    def refresh_job_status_counts(self, run_id):
+        # type: (str) -> Tuple[int, int]
+        """(total jobs, failed jobs) across the refresh history (DF-06)."""
+        total = self.conn.execute(
+            "SELECT COUNT(*) c FROM refresh_jobs WHERE run_id=?", (run_id,)
+        ).fetchone()["c"]
+        failed = self.conn.execute(
+            "SELECT COUNT(*) c FROM refresh_jobs WHERE run_id=? AND status='Failed'",
+            (run_id,)).fetchone()["c"]
+        return total, failed
+
+    def failed_source_recent_views(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        """Sources whose LATEST refresh failed, joined to the published
+        workbooks built on them that carry a recent-view signal (DF-05). Returns
+        raw rows (datasource_id, workbook_id, last_viewed_days_ago); the
+        evaluator applies the `viewed_within_days` window and counts distinct
+        sources, so the window stays in rules.yaml.
+
+        'Latest failed' = the source's most recent refresh_job (max
+        completed_at) has status Failed. Only published lineage edges
+        (upstream_type='datasource') count -- an embedded copy is not the shared
+        source. Workbooks with no usage row (null last_viewed_days_ago) are
+        excluded, never treated as recently viewed."""
+        cur = self.conn.execute(
+            "SELECT DISTINCT l.upstream_id AS datasource_id, "
+            "       l.downstream_id AS workbook_id, "
+            "       ue.last_viewed_days_ago AS last_viewed_days_ago "
+            "FROM refresh_jobs rj "
+            "JOIN lineage l ON l.run_id=rj.run_id AND l.downstream_type='workbook' "
+            "     AND l.upstream_type='datasource' AND l.upstream_id=rj.datasource_id "
+            "JOIN usage_events ue ON ue.run_id=rj.run_id "
+            "     AND ue.workbook_id=l.downstream_id "
+            "WHERE rj.run_id=? AND rj.status='Failed' "
+            "  AND rj.completed_at = (SELECT MAX(rj2.completed_at) FROM refresh_jobs rj2 "
+            "       WHERE rj2.run_id=rj.run_id AND rj2.datasource_id=rj.datasource_id) "
+            "  AND ue.last_viewed_days_ago IS NOT NULL "
+            "ORDER BY l.upstream_id, l.downstream_id", (run_id,))
+        return cur.fetchall()
+
+    def custom_sql_grain_counts(self, run_id):
+        # type: (str) -> Tuple[int, int, int]
+        """(with_group_by, with_user_function, total) over custom-SQL tables
+        (DF-07). A GROUP BY changes the row grain vs the modelled source."""
+        total = self.conn.execute(
+            "SELECT COUNT(*) c FROM custom_sql WHERE run_id=?", (run_id,)
+        ).fetchone()["c"]
+        gb = self.conn.execute(
+            "SELECT COUNT(*) c FROM custom_sql WHERE run_id=? AND has_group_by=1",
+            (run_id,)).fetchone()["c"]
+        uf = self.conn.execute(
+            "SELECT COUNT(*) c FROM custom_sql WHERE run_id=? AND has_user_function=1",
+            (run_id,)).fetchone()["c"]
+        return gb, uf, total
+
+    def datasources_missing_owner(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        """Published sources with no recorded owner (GOV-01). No owner means no
+        accountable party for the source."""
+        cur = self.conn.execute(
+            "SELECT id, name FROM datasources WHERE run_id=? "
+            "AND TRIM(COALESCE(owner,''))='' ORDER BY id", (run_id,))
+        return cur.fetchall()
+
     # -- read helpers for the planner / tests -------------------------------
     def datasource_ids(self, run_id):
         # type: (str) -> List[str]

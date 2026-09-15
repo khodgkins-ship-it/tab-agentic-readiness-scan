@@ -19,7 +19,7 @@ from typing import Dict, List, Optional
 from estate_scan.flags.engine import load_rules
 from estate_scan.score.facets import score_facet
 from estate_scan.score.rollup import (dimension_rollup, domain_rollup,
-                                      governance_score)
+                                      governance_binding, governance_score)
 
 # facet-id prefix -> framework dimension, for interview-only facets not in the
 # scored catalog.
@@ -96,8 +96,9 @@ def score(store, run_id, config=None, rules=None, rules_path=None, now=None):
             target = d["target_stage"]
             dim_scores = dimension_rollup(facets_list, target)
             gov = governance_score(arc_scores, arcs_def, target)
+            gov_binding = governance_binding(arc_scores, arcs_def, gov)
             domains_out.append(
-                domain_rollup(d, facets_list, dim_scores, gov))
+                domain_rollup(d, facets_list, dim_scores, gov, gov_binding))
 
     findings = {"facets": facets_list, "domains": domains_out}
 

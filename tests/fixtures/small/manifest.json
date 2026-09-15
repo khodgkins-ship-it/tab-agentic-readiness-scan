@@ -14,6 +14,7 @@
     "calculated_fields": 5,
     "datasources": 20,
     "fields_total": 445,
+    "max_fields_per_datasource": 23,
     "projects": 3,
     "workbooks": 100
   },
@@ -45,11 +46,31 @@
       "depth": 0,
       "fires": false
     },
+    "DF-04": {
+      "count": 0,
+      "fires": false
+    },
+    "DF-05": {
+      "count": 1,
+      "fires": true
+    },
+    "DF-06": {
+      "count": 1,
+      "fires": false
+    },
     "EST-01": {
       "count": 0,
       "fires": false
     },
+    "GOV-01": {
+      "count": 0,
+      "fires": false
+    },
     "SEC-01": {
+      "count": 0,
+      "fires": false
+    },
+    "SEC-02": {
       "count": 0,
       "fires": false
     },
@@ -64,6 +85,10 @@
     "SEM-03": {
       "coverage": 0.9079,
       "fires": false
+    },
+    "SEM-04": {
+      "fires": false,
+      "max_field_count": 23
     }
   },
   "metric_groups": {
@@ -133,12 +158,14 @@
   "provenance": {
     "max_published_on_published_depth": 0,
     "max_sources_per_upstream_table": 2,
+    "sources_missing_owner": 0,
     "sources_without_upstream": 0
   },
   "query_set_version": "v1",
   "refresh_jobs": {
     "count": 13,
-    "failed": 1
+    "failed": 1,
+    "failed_source_recent_views": 1
   },
   "sec01_expected": false,
   "seed": 7,

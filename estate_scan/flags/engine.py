@@ -161,6 +161,115 @@ def _eval_view_concentration(store, run_id, th):
     return fires, n, evidence
 
 
+# -- R4 evaluators (permissions, freshness, grain, provenance, accountability)
+
+
+def _eval_permissive_grants(store, run_id, th):
+    """SEC-02. A permissive grant is an Allow of a sensitive capability to a
+    broad 'everyone' grantee. Which grantees count as 'everyone' and which
+    capabilities count as sensitive both live in the threshold, so the field
+    team retunes this without a code edit and without touching the fixture."""
+    everyone = set(th.get("everyone_grantees", ["AllUsers"]))
+    sensitive = set(th.get("sensitive_capabilities",
+                           ["Write", "Delete", "ChangePermissions", "ProjectLeader"]))
+    min_count = th.get("min_count", 1)
+    hits = []
+    for r in store.permission_grants(run_id):
+        if (r["mode"] == "Allow" and r["grantee_id"] in everyone
+                and r["capability"] in sensitive):
+            hits.append({"object_type": r["object_type"],
+                         "object_id": r["object_id"],
+                         "grantee": r["grantee_id"],
+                         "capability": r["capability"]})
+    count = len(hits)
+    fires = count >= min_count
+    evidence = {"count": count, "everyone_grantees": sorted(everyone),
+                "sensitive_capabilities": sorted(sensitive), "grants": hits[:50]}
+    return fires, count, evidence
+
+
+def _eval_datasource_field_count(store, run_id, th):
+    """SEM-04. Sources carrying more fields than a person can reason about are an
+    exposure-shape problem, not a correctness one. Count = sources over the
+    threshold; the salient figure in evidence is the widest source seen."""
+    max_fc = th.get("max_field_count", 300)
+    rows = store.datasource_field_counts(run_id)
+    over = [{"datasource_id": r["datasource_id"], "fields": r["n"]}
+            for r in rows if r["n"] > max_fc]
+    max_seen = max((r["n"] for r in rows), default=0)
+    fires = len(over) > 0
+    evidence = {"max_field_count": max_seen, "threshold": max_fc,
+                "datasources_over_threshold": over}
+    return fires, len(over), evidence
+
+
+def _eval_source_without_upstream(store, run_id, th):
+    """DF-04. Published sources tracing to no upstream at all -- provenance
+    cannot be shown for them."""
+    min_count = th.get("min_count", 1)
+    rows = store.datasources_without_upstream(run_id)
+    count = len(rows)
+    fires = count >= min_count
+    evidence = {"count": count,
+                "datasources": [r["name"] or r["id"] for r in rows[:50]]}
+    return fires, count, evidence
+
+
+def _eval_refresh_failure_rate(store, run_id, th):
+    """DF-06. Failure rate across the refresh history. Count = failed jobs (the
+    salient figure); guarded against an empty history."""
+    max_rate = th.get("max_failure_rate", 0.10)
+    total, failed = store.refresh_job_status_counts(run_id)
+    rate = (failed / float(total)) if total else 0.0
+    fires = rate > max_rate
+    evidence = {"failure_rate": round(rate, 4), "failed": failed,
+                "total": total, "threshold": max_rate}
+    return fires, failed, evidence
+
+
+def _eval_failed_refresh_recent_view(store, run_id, th):
+    """DF-05. A source whose LATEST refresh failed while a published workbook
+    built on it was viewed within `viewed_within_days` -- broken or stale data
+    reaching users. The store returns the raw failed-source/recent-view join;
+    the window and firing count live here so both stay in rules.yaml. Count =
+    distinct affected sources."""
+    within = th.get("viewed_within_days", 30)
+    min_count = th.get("min_count", 1)
+    sources = {}  # type: Dict[str, set]
+    for r in store.failed_source_recent_views(run_id):
+        lvd = r["last_viewed_days_ago"]
+        if lvd is not None and lvd <= within:
+            sources.setdefault(r["datasource_id"], set()).add(r["workbook_id"])
+    count = len(sources)
+    fires = count >= min_count
+    evidence = {"count": count, "viewed_within_days": within,
+                "sources": sorted(sources.keys())[:50]}
+    return fires, count, evidence
+
+
+def _eval_custom_sql_grain_loss(store, run_id, th):
+    """DF-07 (suppressed by default -- noisy on large estates). Custom SQL with a
+    GROUP BY changes the row grain vs the modelled source. Count = tables with a
+    GROUP BY; user-function count is carried in evidence but does not fire."""
+    min_count = th.get("min_count", 1)
+    gb, uf, total = store.custom_sql_grain_counts(run_id)
+    fires = gb >= min_count
+    evidence = {"with_group_by": gb, "with_user_function": uf,
+                "total": total, "threshold": min_count}
+    return fires, gb, evidence
+
+
+def _eval_source_owner_missing(store, run_id, th):
+    """GOV-01. A published source with no owner has no accountable party."""
+    min_count = th.get("min_count", 1)
+    rows = store.datasources_missing_owner(run_id)
+    count = len(rows)
+    fires = count >= min_count
+    evidence = {"count": count,
+                "datasources": [r["name"] or r["id"] for r in rows[:50]]}
+    return fires, count, evidence
+
+
 EVALUATORS = {
     "formula_contains_user_context": _eval_user_context,
     "metric_group_variant_count": _eval_variant_count,
@@ -171,6 +280,13 @@ EVALUATORS = {
     "published_on_published_depth": _eval_pubon_pub_depth,
     "zero_view_workbooks": _eval_zero_view,
     "view_concentration": _eval_view_concentration,
+    "permissive_grants": _eval_permissive_grants,
+    "datasource_field_count": _eval_datasource_field_count,
+    "source_without_upstream": _eval_source_without_upstream,
+    "refresh_failure_rate": _eval_refresh_failure_rate,
+    "failed_refresh_recent_view": _eval_failed_refresh_recent_view,
+    "custom_sql_grain_loss": _eval_custom_sql_grain_loss,
+    "source_owner_missing": _eval_source_owner_missing,
 }
 
 
