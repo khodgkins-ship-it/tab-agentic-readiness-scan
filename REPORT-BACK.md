@@ -5,14 +5,12 @@ milestone reveals something.
 
 ## 1. What the metadata explorer's GraphQL client does with partial responses
 
-**Status: ported, source not yet verified against the live repo.**
+**Status: verified against source (R0).** The
+`tableau/tableau-metadata-explorer` repo was read at R0 and the claims below are
+now off the source, not the docs.
 
-The reuse plan (`05-metadata-explorer-reuse.md`) describes `tableau_metadata.py`
-as exposing a `classify_result` that recognises node-limit partial responses.
-This prototype runs offline and the `tableau/tableau-metadata-explorer` repo has
-not been cloned into this sandbox, so the classification in
-`estate_scan/clients/base.py::classify_graphql` was ported from the *documented*
-behaviour, not read off the source. Specifically:
+The classification in `estate_scan/clients/base.py::classify_graphql` mirrors
+`app/proxy/tableau_metadata.py::classify_result` exactly:
 
 - HTTP 200 with a top-level `errors` array is normal, not fatal.
 - An `errors` entry whose `extensions.code` is a known warning code
@@ -20,14 +18,32 @@ behaviour, not read off the source. Specifically:
   a *partial* result: usable but known-incomplete.
 - Any other error code, or null `data`, is fatal.
 
-Acting on partial (subdividing the shard) is our extract layer's job
-(`extract/runner.py`), never upstream's.
+`classify_result` **does** exist under that name and **does** enumerate this same
+warning-code family — the reuse doc was accurate on that point, and our port is a
+faithful copy of the rule and the code set.
 
-**To confirm before upstreaming:** clone the repo, read
-`app/proxy/tableau_metadata.py`, and check whether `classify_result` (a) exists
-under that name, (b) enumerates the same warning-code set, and (c) already
-subdivides or merely classifies. If it only classifies (likely), subdivision is
-a genuine upstream contribution candidate. **Do not open a PR without asking.**
+What the source also showed is that upstream does **not** apply this
+classification uniformly, so the prototype's earlier "acting on partial is our
+job, never upstream's" was imprecise in both directions:
+
+- **Detection is not universal upstream.** `classify_result` is one code path,
+  not a gate every response passes through. `execute()` returns raw responses
+  without classifying; the raw `/proxy/metadata` passthrough forwards a truncated
+  200 as-is; and `duplicate_calculated_fields` treats the very same warning codes
+  as a **hard failure** rather than a usable-partial.
+- **Reaction to partial is inconsistent upstream.** At least one caller *does*
+  subdivide — `router.py`'s `fetch_more` halves the page size on a limit warning
+  — while others do neither.
+
+Our design makes **both** steps uniform, which is the substantive difference
+worth recording: every response is classified in one place (`classify_graphql`),
+and acting on partial — subdividing the shard and retrying — is the extract
+layer's consistent job (`extract/runner.py`), never a per-caller choice.
+
+**Upstream contribution candidate (do NOT open a PR without asking):** uniform
+partial-response detection applied at the transport boundary, plus consistent
+shard subdivision, rather than the current mix of classify-here / subdivide-there
+/ hard-fail-elsewhere. Prepared as notes/patches only at R6 per the plan.
 
 ## 2. Specified fields that could not be confirmed against the schema reference
 

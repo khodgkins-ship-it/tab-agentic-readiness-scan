@@ -1,0 +1,43 @@
+Vendored third-party components
+===============================
+
+This directory contains code and data vendored from a third-party project and
+redistributed under the Apache License 2.0 (see the LICENSE file in this
+directory). Attribution and a summary of modifications follow, as required by
+Apache 2.0 §4.
+
+--------------------------------------------------------------------------------
+Source project : tableau/tableau-metadata-explorer
+                 https://github.com/tableau/tableau-metadata-explorer
+Copyright      : (c) Salesforce, Inc.
+License        : Apache License 2.0
+--------------------------------------------------------------------------------
+
+Vendored files:
+
+  query_validator.py
+      From app/proxy/query_validator.py. Validates a GraphQL query against the
+      Tableau Metadata API schema and returns a list of error strings.
+      MODIFICATIONS:
+        - imports rebased from the upstream `proxy` package to
+          `estate_scan.vendor`;
+        - the optional comprehensive layer (schema_validator + the ~6.9 MB
+          introspection dump) and the per-tenant runtime rules are not vendored,
+          so both optional imports resolve absent and the module runs its
+          self-contained structural checks plus the whitelist checks. This is the
+          graceful degradation the upstream try/except already provides.
+      The validation logic itself is unmodified.
+
+  types-and-filters.md
+      From app/static/schema/types-and-filters.md. The introspected type,
+      lineage, and filter-field reference from which query_validator builds its
+      whitelists. Unmodified.
+
+  schema_loader.py
+      NOT from upstream. A minimal shim we wrote to feed query_validator the one
+      attribute it reads (`_types_and_filters`), loading only types-and-filters.md.
+
+Why vendored rather than depended-on: the upstream modules are coupled to a Flask
+application (tenant DB, settings, logger) and pin assumptions we replace (API
+version, Cloud-only TLS). We reuse the hard-won query-validation knowledge, not
+the application. See 05-metadata-explorer-reuse.md sections 2 and 7.3.

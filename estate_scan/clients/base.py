@@ -98,6 +98,21 @@ class EstateClient(object):
         # type: () -> Dict[str, bool]
         raise NotImplementedError
 
+    def run_config(self):
+        # type: () -> dict
+        """The run's configuration: the specialist-supplied inputs the scan and
+        scorer read (declared core metrics, domain scoping, target stages) plus
+        the site/deployment facts the run metadata records.
+
+        Part of the contract so the extract runner and scorer can read it
+        directly rather than duck-typing it. The base returns an empty config;
+        the fixture client carries it in the estate file and the live client
+        assembles it from the resolved config file plus negotiated server info.
+        Keys are optional by contract -- callers use ``.get(...)`` -- so a
+        minimal client may return ``{}``.
+        """
+        return {}
+
     def close(self):
         # type: () -> None
         """Sign out / release resources. Best-effort, always safe to call."""
@@ -107,11 +122,24 @@ class EstateClient(object):
 # ---------------------------------------------------------------------------
 # GraphQL result classification, ported from tableau-metadata-explorer.
 #
-# The metadata explorer's tableau_metadata.classify_result() already recognises
-# node-limit partial responses. We port the classification (not the whole
-# module) so our offline fixture client and the live client share one honest
-# notion of "partial". Acting on partial -- subdividing the shard -- is our
-# extract layer's job (extract/runner.py); upstream only classifies.
+# Verified against source (tableau/tableau-metadata-explorer, R0):
+# tableau_metadata.classify_result() does recognise node-/time-limit partial
+# responses -- a warning code with data present is treated as usable-but-
+# incomplete. Our classify_graphql() below mirrors that rule and warning-code
+# set exactly, so our offline fixture client and the live client share one
+# honest notion of "partial".
+#
+# What we do NOT inherit is uniform behaviour, because upstream does not apply
+# the classification everywhere: execute() returns raw responses without
+# classifying, the raw /proxy/metadata passthrough forwards truncated 200s
+# as-is, and duplicate_calculated_fields treats the same warnings as a hard
+# failure. Reaction to partial results is likewise inconsistent -- some callers
+# subdivide (router.py fetch_more halves the page size) and some do not. So the
+# earlier "upstream only classifies" was imprecise both ways.
+#
+# Our design makes both steps uniform: every response is classified here, and
+# acting on partial -- subdividing the shard and retrying -- is the extract
+# layer's consistent job (extract/runner.py), never a per-caller choice.
 # ---------------------------------------------------------------------------
 
 # Warnings: partial results ARE returned. Keep the data; mark it incomplete.

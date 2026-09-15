@@ -84,10 +84,10 @@ class ExtractRunner(object):
         # type: () -> None
         cfg = self._run_config()
         self.store.start_run(self.run_id, {
-            "site_id": getattr(self.client, "site_id", None),
-            "site_name": getattr(self.client, "site_name", None),
-            "deployment_type": getattr(self.client, "deployment_type", None),
-            "adoption_source": getattr(self.client, "adoption_source", None),
+            "site_id": self.client.site_id,
+            "site_name": self.client.site_name,
+            "deployment_type": self.client.deployment_type,
+            "adoption_source": self.client.adoption_source,
             "started_at": _now(),
             "mode": "scan",
             "tool_version": self._manifest.get("tool_version"),
@@ -126,9 +126,8 @@ class ExtractRunner(object):
             self.client.close()
 
     def _run_config(self):
-        if hasattr(self.client, "run_config"):
-            return self.client.run_config()
-        return {}
+        # run_config() is part of the EstateClient contract (base returns {}).
+        return self.client.run_config()
 
     # -- field shards --------------------------------------------------------
     def _run_field_shards(self):
