@@ -71,6 +71,46 @@ class RestResult(object):
         return 200 <= self.status < 300
 
 
+class VdsResult(object):
+    """A VizQL Data Service query response: status plus the parsed data rows.
+
+    Deliberately httpx-free, like the rest of this module, so the offline
+    pipeline never drags in the transport. `value(caption)` reads a single
+    aggregate cell from the first data row -- VDS keys each returned column by the
+    `fieldCaption` the query asked for -- and returns None when the cell is
+    absent or non-numeric, so a missing figure never silently reads as zero.
+    """
+
+    __slots__ = ("status", "data", "error", "raw")
+
+    def __init__(self, status, data=None, error=None, raw=None):
+        # type: (int, Optional[List[dict]], Optional[str], Optional[dict]) -> None
+        self.status = status
+        self.data = data or []
+        self.error = error
+        self.raw = raw
+
+    @property
+    def ok(self):
+        return 200 <= self.status < 300 and self.error is None
+
+    def value(self, caption):
+        # type: (str) -> Optional[float]
+        if not self.data:
+            return None
+        cell = self.data[0].get(caption)
+        if cell is None:
+            return None
+        try:
+            return float(cell)
+        except (TypeError, ValueError):
+            return None
+
+    def __repr__(self):
+        return "VdsResult(status=%r, rows=%d, error=%r)" % (
+            self.status, len(self.data), self.error)
+
+
 class EstateClient(object):
     """Abstract backend. Subclasses implement `graphql` and `rest`."""
 

@@ -116,7 +116,13 @@ def _definition_multiplicity(store, run_id):
         disagreeing = len(used_hashes) or len(
             {v["normalized_hash"] for v in variants})
         dominant = any(v["is_dominant"] for v in variants)
-        groups.append({
+        # Optional VDS join (R3): when the full-mode `resolve` step executed this
+        # group, attach each variant's tested figure and the group's reference +
+        # most-material pair. Absent (empty map) when VDS did not run, so the
+        # rendered shape is exactly as before -- backward compatible.
+        exec_rows = store.variant_execution_detail(run_id, gid)
+        exec_by_field = {r["field_id"]: r for r in exec_rows}
+        group = {
             "group_id": gid,
             "label": g["canonical_label"],
             "method": g["method"],
@@ -127,8 +133,12 @@ def _definition_multiplicity(store, run_id):
             "variants_covering_80pct_views": cover80_for(store, run_id, gid),
             "group_views": group_views,
             "dominant": dominant,
-            "variants": [_variant(v, group_views) for v in variants],
-        })
+            "variants": [_variant(v, group_views, exec_by_field.get(v["field_id"]))
+                         for v in variants],
+        }
+        if exec_rows:
+            group["execution"] = _execution_summary(exec_rows)
+        groups.append(group)
     # Sort on absence of a dominant variant first, not variant count: fewer
     # variants with no clear candidate is the harder adjudication (build brief
     # section 6). Ties broken by disagreement, then size, then label.
@@ -140,10 +150,10 @@ def _definition_multiplicity(store, run_id):
     }
 
 
-def _variant(v, group_views):
-    # type: (object, int) -> dict
+def _variant(v, group_views, ex=None):
+    # type: (object, int, Optional[object]) -> dict
     views = v["view_count"] or 0
-    return {
+    out = {
         "field_name": v["field_name"],
         "usage_rank": v["usage_rank"],
         "view_count": views,
@@ -155,6 +165,81 @@ def _variant(v, group_views):
         "resolved_formula": v["resolved_formula"],
         "owner": v["owner"],
         "datasource_name": v["datasource_name"],
+    }
+    if ex is not None:
+        out["execution"] = _variant_execution(ex)
+    return out
+
+
+def _variant_execution(ex):
+    # type: (object) -> dict
+    """Per-variant VDS result. `value` is the raw returned aggregate -- redacted
+    from the presentation build (report/redact.py); the diff figures are safe in
+    both builds. An unexecuted variant carries its class + reason and a null
+    value, so it never reads as agreeing."""
+    return {
+        "executability_class": ex["executability_class"],
+        "untested_reason": ex["untested_reason"],
+        "is_reference": bool(ex["is_reference"]),
+        "period": ex["period"],
+        "context_applied": bool(ex["context_applied"]),
+        "value": ex["value"],
+        "abs_diff": ex["abs_diff"],
+        "rel_diff": ex["rel_diff"],
+        "material": (bool(ex["material"]) if ex["material"] is not None else None),
+    }
+
+
+def _execution_summary(exec_rows):
+    # type: (List[object]) -> dict
+    """Group-level VDS rollup: the reference variant, tested/untested counts, the
+    executability distribution, and the single most-material pair (reference vs
+    the variant with the largest relative gap). `reference_value`/`variant_value`
+    are raw figures -- redacted from the presentation build."""
+    by_class = {}  # type: dict
+    tested = 0
+    reference_field = None
+    reference_value = None
+    most = None
+    for r in exec_rows:
+        cls = r["executability_class"]
+        by_class[cls] = by_class.get(cls, 0) + 1
+        if cls == "executable":
+            tested += 1
+        if r["is_reference"]:
+            reference_field = r["field_name"]
+            reference_value = r["value"]
+        if r["rel_diff"] is not None and not r["is_reference"]:
+            if most is None or r["rel_diff"] > most["rel_diff"]:
+                most = {
+                    "field_name": r["field_name"],
+                    "value": r["value"],
+                    "abs_diff": r["abs_diff"],
+                    "rel_diff": r["rel_diff"],
+                    "material": (bool(r["material"])
+                                 if r["material"] is not None else None),
+                }
+    material = any(bool(r["material"]) for r in exec_rows
+                   if r["material"] is not None and not r["is_reference"])
+    pair = None
+    if most is not None:
+        pair = {
+            "reference_field": reference_field,
+            "reference_value": reference_value,
+            "variant_field": most["field_name"],
+            "variant_value": most["value"],
+            "abs_diff": most["abs_diff"],
+            "rel_diff": most["rel_diff"],
+            "material": most["material"],
+        }
+    return {
+        "period": exec_rows[0]["period"],
+        "reference_field": reference_field,
+        "tested": tested,
+        "untested": len(exec_rows) - tested,
+        "executability": by_class,
+        "material_disagreement": material,
+        "most_material_pair": pair,
     }
 
 

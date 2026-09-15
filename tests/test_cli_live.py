@@ -65,3 +65,26 @@ def test_fixture_and_config_are_mutually_exclusive(tmp_path):
     with pytest.raises(SystemExit):
         main(["scan", "--fixture", "f", "--config", cfg,
               "--out", str(tmp_path / "out")])
+
+
+def test_resolve_dry_run_validates_without_connecting(tmp_path, capsys):
+    # `resolve` (the VDS full-mode step) has the same two-step opt-in as scan:
+    # --config alone validates and never connects or touches a store.
+    cfg = _write(str(tmp_path / "live.json"),
+                 {"host": "https://x.online.tableau.com",
+                  "deployment_type": "cloud", "site_content_url": "",
+                  "pat_name": "estate-scan-readonly"})
+    rc = main(["resolve", "--config", cfg, "--out", str(tmp_path / "out")])
+    assert rc == 0
+    assert "is valid" in capsys.readouterr().out
+    assert not os.path.exists(str(tmp_path / "out" / "estate.db"))
+
+
+def test_resolve_config_with_planted_secret_aborts(tmp_path):
+    cfg = _write(str(tmp_path / "live.json"),
+                 {"host": "https://x.online.tableau.com",
+                  "deployment_type": "cloud",
+                  "pat_secret": "AbcdEFGH1234ijklMNOP5678qrstUVWXyz90ABcd"})
+    with pytest.raises(SystemExit) as exc:
+        main(["resolve", "--config", cfg, "--out", str(tmp_path / "out")])
+    assert "AbcdEFGH1234ijklMNOP5678qrstUVWXyz90ABcd" not in str(exc.value)

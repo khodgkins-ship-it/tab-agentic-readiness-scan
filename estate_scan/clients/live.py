@@ -36,12 +36,20 @@ from estate_scan.clients.base import (
     EstateClient,
     GraphQLResult,
     RestResult,
+    VdsResult,
     classify_graphql,
 )
+from estate_scan.readonly import assert_vds_body_read_only
 
 import httpx
 
 _METADATA_GRAPHQL_PATH = "/api/metadata/graphql"
+# The one VizQL Data Service endpoint we ever POST to (R3). It is read-only by
+# construction: the body carries a datasource reference plus a read query, and
+# Gate C (`ReadOnlyGuard`) admits no other VDS path. The capability probe issues
+# a GET here -- a live site answers a GET to this POST-only endpoint with 405,
+# which still proves the service is present without needing a datasource LUID.
+_VDS_QUERY_PATH = "/api/v1/vizql-data-service/query-datasource"
 _OWNER_QUERIES = {
     "workbooks": "workbooksConnection",
     "published_datasources": "publishedDatasourcesConnection",
@@ -168,6 +176,27 @@ class LiveClient(EstateClient):
         return RestResult(resp.status_code, items=items, total_available=total,
                           has_more=False, raw=body)
 
+    # -- VizQL Data Service (Gate C) -----------------------------------------
+    def vds_query(self, body):
+        # type: (dict) -> VdsResult
+        """Issue one read-only VizQL Data Service query and parse the result.
+
+        The body is re-validated against the read schema here -- belt to the
+        transport guard's braces -- so a hand-built write-shaped body is refused
+        at the client too, before any byte leaves. The only POST path is
+        query-datasource; the caller (`clients/vds.py`) builds the body from a
+        resolved variant + fixed period, so there is no raw-SQL surface.
+        """
+        assert_vds_body_read_only(body, label="vds_query")
+        self._maybe_refresh()
+        try:
+            resp = self._client.post(_VDS_QUERY_PATH, json=body,
+                                     headers=self._auth_headers())
+        except httpx.HTTPError as exc:
+            return VdsResult(599,
+                             error="transport error: %s" % type(exc).__name__)
+        return _classify_vds(resp.status_code, _safe_json(resp))
+
     # -- capabilities --------------------------------------------------------
     def detect_capabilities(self):
         # type: () -> Dict[str, bool]
@@ -180,7 +209,7 @@ class LiveClient(EstateClient):
             # nothing they gate ever reads as clean.
             "admin_insights": False,        # R2: Admin Insights datasources (VDS)
             "repository": False,            # R2: Server repository access
-            "vizql_data_service": False,    # R3: VDS executor
+            "vizql_data_service": self._probe_vds(),  # R3: VDS executor
             "data_quality_api": False,      # R4: data-quality warnings
         }
         self.capabilities = caps
@@ -208,6 +237,22 @@ class LiveClient(EstateClient):
             return False
         body = _safe_json(resp)
         return isinstance(body, dict) and bool(body.get("data"))
+
+    def _probe_vds(self):
+        # type: () -> bool
+        """Is the VizQL Data Service available on this site? Probed with a GET
+        to the (POST-only) query-datasource endpoint: a live site answers 405
+        Method Not Allowed when the service is present and 404 when it is not, so
+        a 200/405 means present. A GET always passes Gate C and needs no
+        datasource LUID. The exact readiness semantics are confirmed against a
+        real site at R6; until then the probe is conservative (absent unless the
+        endpoint clearly answers)."""
+        self._maybe_refresh()
+        try:
+            resp = self._client.get(_VDS_QUERY_PATH, headers=self._auth_headers())
+        except httpx.HTTPError:
+            return False
+        return resp.status_code in (200, 405)
 
     def _probe_rest(self, resource):
         # type: (str) -> bool
@@ -290,6 +335,21 @@ def _safe_json(resp):
         return resp.json()
     except ValueError:
         return {"error": "non-JSON response (HTTP %d)" % resp.status_code}
+
+
+def _classify_vds(status, body):
+    # type: (int, dict) -> VdsResult
+    """Turn a VDS query response into a `VdsResult`. A non-200, a non-dict body,
+    or a body missing the `data` array is an error, never usable-but-empty."""
+    if status != 200:
+        msg = body.get("error") if isinstance(body, dict) else None
+        return VdsResult(status, error=(msg if isinstance(msg, str) else None)
+                         or ("VDS query returned HTTP %d" % status), raw=body)
+    data = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(data, list):
+        return VdsResult(status, error="VDS response missing data array",
+                         raw=body if isinstance(body, dict) else None)
+    return VdsResult(status, data=data, raw=body)
 
 
 def _parse_rest_list(body, item_key):

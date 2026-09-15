@@ -724,6 +724,70 @@ class Store(object):
             "ORDER BY mv.usage_rank, mv.field_id", (run_id, group_id))
         return cur.fetchall()
 
+    # -- VDS material disagreement (R3) --------------------------------------
+    def variant_execution_input(self, run_id, group_id):
+        # type: (str, str) -> List[sqlite3.Row]
+        """Per variant of a group, the facts the VDS executor needs to classify
+        and query it: the field name (the VDS field caption), its role and data
+        type, the owning source's queryable LUID, and the resolver's verdict.
+        Ordered by usage rank so the reference (dominant, else best rank) is
+        deterministic. This is the read side that feeds `derive/disagreement.py`;
+        it never issues an API call itself."""
+        cur = self.conn.execute(
+            "SELECT mv.field_id AS field_id, f.name AS field_name, "
+            "       f.role AS role, f.data_type AS data_type, "
+            "       mv.usage_rank AS usage_rank, mv.view_count AS view_count, "
+            "       mv.is_dominant AS is_dominant, "
+            "       ds.luid AS datasource_luid, ds.name AS datasource_name, "
+            "       rf.resolved_formula AS resolved_formula, "
+            "       rf.resolution_status AS resolution_status "
+            "FROM metric_variants mv "
+            "LEFT JOIN fields f ON f.run_id=mv.run_id AND f.id=mv.field_id "
+            "LEFT JOIN datasources ds "
+            "  ON ds.run_id=mv.run_id AND ds.id=f.datasource_id "
+            "LEFT JOIN resolved_formulas rf "
+            "  ON rf.run_id=mv.run_id AND rf.field_id=mv.field_id "
+            "WHERE mv.run_id=? AND mv.group_id=? "
+            "ORDER BY mv.usage_rank, mv.field_id", (run_id, group_id))
+        return cur.fetchall()
+
+    def clear_variant_execution(self, run_id):
+        # type: (str) -> None
+        """Drop prior VDS execution rows so a re-resolve is clean."""
+        self.conn.execute("DELETE FROM variant_execution WHERE run_id=?", (run_id,))
+
+    def save_variant_execution(self, run_id, group_id, field_id,
+                               executability_class, untested_reason, is_reference,
+                               period, context_applied, value, abs_diff, rel_diff,
+                               material, executed_at):
+        # type: (str, str, str, str, Optional[str], object, Optional[str], object, Optional[float], Optional[float], Optional[float], object, str) -> None
+        self.conn.execute(
+            "INSERT OR REPLACE INTO variant_execution "
+            "(run_id, group_id, field_id, executability_class, untested_reason, "
+            " is_reference, period, context_applied, value, abs_diff, rel_diff, "
+            " material, executed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (run_id, group_id, field_id, executability_class, untested_reason,
+             _b(is_reference), period, _b(context_applied), value, abs_diff,
+             rel_diff, _b(material), executed_at))
+
+    def variant_execution_detail(self, run_id, group_id):
+        # type: (str, str) -> List[sqlite3.Row]
+        """Every executed/considered variant of a group with its field name --
+        the read side the findings join uses. Reference variant(s) first."""
+        cur = self.conn.execute(
+            "SELECT ve.field_id AS field_id, f.name AS field_name, "
+            "       ve.executability_class AS executability_class, "
+            "       ve.untested_reason AS untested_reason, "
+            "       ve.is_reference AS is_reference, ve.period AS period, "
+            "       ve.context_applied AS context_applied, ve.value AS value, "
+            "       ve.abs_diff AS abs_diff, ve.rel_diff AS rel_diff, "
+            "       ve.material AS material, ve.executed_at AS executed_at "
+            "FROM variant_execution ve "
+            "LEFT JOIN fields f ON f.run_id=ve.run_id AND f.id=ve.field_id "
+            "WHERE ve.run_id=? AND ve.group_id=? "
+            "ORDER BY ve.is_reference DESC, ve.field_id", (run_id, group_id))
+        return cur.fetchall()
+
     def group_workbook_count(self, run_id, group_id):
         # type: (str, str) -> int
         """Distinct workbooks any variant of the group is used in."""

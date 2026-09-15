@@ -34,6 +34,11 @@ _QUERY_NAMES = frozenset({
 _LINE_COMMENT = re.compile(r"#[^\n\r]*")
 _OP_NAME = re.compile(r"\b(?:query|mutation|subscription)\s+([A-Za-z_]\w*)")
 
+# The one VizQL Data Service endpoint the client POSTs to (R3). Mirrors
+# live._VDS_QUERY_PATH; kept as a literal so the transport does not import the
+# production client just for a string.
+_VDS_QUERY_PATH = "/api/v1/vizql-data-service/query-datasource"
+
 
 def _op_name(query_text):
     # type: (str) -> str
@@ -63,11 +68,18 @@ class FixtureTransport(object):
       * ``rest_status``       -- status for REST probe GETs (default 403, so the
                                  live capability probe reports rest_jobs/rest_tasks
                                  False even though the fixture client serves them).
+      * ``vds_available``     -- True makes the VDS capability probe (a GET to the
+                                 POST-only query-datasource endpoint) answer 405
+                                 (service present); False answers 404 (absent).
+      * ``vds_values``        -- {"<luid>::<fieldCaption>": number} the VDS query
+                                 branch answers aggregate reads from; an unknown
+                                 measure returns an empty data row (value None).
     """
 
     def __init__(self, estate, api_version="3.24", partial_over=None,
                  signin_status=200, metadata_available=True,
-                 graphql_status=200, rest_status=403):
+                 graphql_status=200, rest_status=403,
+                 vds_available=False, vds_values=None):
         self._fc = FixtureClient(estate, partial_over=partial_over)
         meta = estate.get("meta", {})
         site = meta.get("site", {})
@@ -80,6 +92,8 @@ class FixtureTransport(object):
         self.metadata_available = metadata_available
         self.graphql_status = graphql_status
         self.rest_status = rest_status
+        self.vds_available = vds_available
+        self._vds_values = vds_values or {}
         self._signin_count = 0
         self.requests = []  # type: list  # (method, path) in call order
         self.transport = httpx.MockTransport(self._handle)
@@ -101,11 +115,31 @@ class FixtureTransport(object):
             return httpx.Response(204)
         if path == "/api/metadata/graphql":
             return self._graphql(request)
+        if path == _VDS_QUERY_PATH:
+            if method == "GET":
+                # Capability probe: 405 (present) when VDS is enabled, else 404.
+                return httpx.Response(405 if self.vds_available else 404,
+                                      json={"error": "method not allowed"})
+            if method == "POST":
+                return self._vds(request)
         if method == "GET":
             return httpx.Response(
                 self.rest_status,
                 json={"error": {"summary": "probe not enabled in fixture"}})
         return httpx.Response(404, json={"error": "unrouted %s %s" % (method, path)})
+
+    # -- VizQL Data Service --------------------------------------------------
+    def _vds(self, request):
+        # type: (httpx.Request) -> httpx.Response
+        body = json.loads(request.content.decode("utf-8"))
+        luid = (body.get("datasource") or {}).get("datasourceLuid")
+        fields = (body.get("query") or {}).get("fields") or []
+        caption = fields[0].get("fieldCaption") if fields else None
+        key = "%s::%s" % (luid, caption)
+        if key in self._vds_values:
+            return httpx.Response(200, json={"data": [{caption: self._vds_values[key]}]})
+        # Unknown measure -> an empty data row, so `VdsResult.value` reads None.
+        return httpx.Response(200, json={"data": [{}]})
 
     # -- auth ----------------------------------------------------------------
     def _signin(self):

@@ -25,9 +25,11 @@ from estate_scan.clients import rest_resources
 from estate_scan.clients.auth import Credentials, build_session
 from estate_scan.clients.live import LiveClient
 from estate_scan.clients.rest_resources import RestResource
+from estate_scan.clients.vds import VdsExecutor
 from estate_scan.readonly import (
     ReadOnlyViolation,
     assert_graphql_read_only,
+    assert_vds_body_read_only,
     graphql_operations,
 )
 from estate_scan.security import ReadOnlyGuard, assert_no_secrets_in_config
@@ -155,6 +157,26 @@ def test_guard_refuses_write_shaped_vds_body():
         client.post("/api/v1/vizql-data-service/query-datasource",
                     json={"datasource": {"luid": "x"}, "publish": {"name": "y"}})
     client.close()
+
+
+def test_guard_refuses_vds_post_to_any_other_path():
+    # The only VDS POST path admitted is query-datasource; a sibling VDS endpoint
+    # (metadata read, or anything else) is refused as a non-allowlisted POST.
+    client = _guarded_client(lambda r: httpx.Response(200, json={}))
+    with pytest.raises(ReadOnlyViolation):
+        client.post("/api/v1/vizql-data-service/read-metadata",
+                    json={"datasource": {"datasourceLuid": "x"}})
+    client.close()
+
+
+def test_vds_body_builder_emits_only_read_keys():
+    # The only body the executor ever builds carries a datasource reference plus
+    # a read query -- it passes the read-only body check by construction.
+    body = VdsExecutor.build_query_body("luid-1", "Revenue", function="SUM",
+                                        period_field="Month", period_value="2024-01")
+    assert set(body) <= {"datasource", "query"}
+    assert set(body["query"]) <= {"fields", "filters"}
+    assert_vds_body_read_only(body, label="builder")  # must not raise
 
 
 def test_guard_wraps_whatever_transport_it_is_given():

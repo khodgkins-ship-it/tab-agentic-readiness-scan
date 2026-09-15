@@ -38,6 +38,18 @@ def redact(findings):
                 variant["resolved_formula"] = REDACTED
             if variant.get("owner") is not None:
                 variant["owner"] = REDACTED
+            # R3: the raw VDS aggregate is a business figure -- redact it from the
+            # presentation build; the diff figures (abs/rel/material) stay.
+            ex = variant.get("execution")
+            if ex and ex.get("value") is not None:
+                ex["value"] = REDACTED
+        gx = group.get("execution")
+        if gx:
+            pair = gx.get("most_material_pair")
+            if pair:
+                for key in ("reference_value", "variant_value"):
+                    if pair.get(key) is not None:
+                        pair[key] = REDACTED
 
     sec = out.get("findings", {}).get("security_exposure", {})
     for field in sec.get("fields", []):

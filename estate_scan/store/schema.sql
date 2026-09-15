@@ -187,6 +187,38 @@ CREATE TABLE IF NOT EXISTS metric_variants (
     PRIMARY KEY (run_id, group_id, field_id)
 );
 
+-- VizQL Data Service material-disagreement execution (R3). One row per variant
+-- of a contested group the executor considered. SEM-02 in the scan is a
+-- STRUCTURAL proxy (distinct resolved definitions among used variants); this is
+-- the CONSEQUENCE layer -- what each executable variant actually returns for one
+-- agreed period, so a report can show the dollar gap, not just that the formulas
+-- differ. It is written only by the separate full-mode `resolve` step, never by
+-- the scan loop, and only when the `vizql_data_service` capability is present.
+--
+--   * `executability_class` records why a variant was or was not run
+--     (executable | context_bound | unresolvable | not_comparable), so an
+--     unexecuted variant is reported with its reason, never counted as agreeing.
+--   * `value` is the raw returned aggregate -- carried in the WORKING build only
+--     and redacted from the presentation build (report/redact.py).
+--   * `abs_diff`/`rel_diff`/`material` are the comparison against the group's
+--     reference variant and are safe to carry in BOTH builds.
+CREATE TABLE IF NOT EXISTS variant_execution (
+    run_id              TEXT,
+    group_id            TEXT,
+    field_id            TEXT,
+    executability_class TEXT,     -- executable | context_bound | unresolvable | not_comparable
+    untested_reason     TEXT,
+    is_reference        INTEGER,  -- 1 for the group's reference (baseline) variant
+    period              TEXT,     -- the fixed period the aggregate was computed for
+    context_applied     INTEGER,  -- 1 if the query carried a period/context filter
+    value               REAL,     -- raw returned aggregate (working build only)
+    abs_diff            REAL,      -- |value - reference_value|
+    rel_diff            REAL,      -- abs_diff / |reference_value|
+    material            INTEGER,   -- 1 if rel_diff exceeds the agreed tolerance
+    executed_at         TEXT,
+    PRIMARY KEY (run_id, group_id, field_id)
+);
+
 CREATE TABLE IF NOT EXISTS flags (
     run_id       TEXT,
     flag_id      TEXT,

@@ -172,6 +172,56 @@ def cmd_scan(args):
     return 0
 
 
+# -- resolve (full mode, live-only VDS) --------------------------------------
+
+def cmd_resolve(args):
+    # type: (argparse.Namespace) -> int
+    """Resolve material disagreement between metric variants via the VizQL Data
+    Service. This is the separate full-mode step (never part of `scan`): the
+    analyst is present and the period + tolerance are agreed before results are
+    shown. It reads the store an earlier `scan` populated and executes only
+    read-only aggregate queries; it is gated on the `vizql_data_service`
+    capability (off -> recorded `skipped` in coverage, never silently clean)."""
+    if not args.live:
+        # Dry validation only, mirroring `scan`: check the config, never connect.
+        _load_live_config(args.config)
+        print("config %s is valid. Re-run with --live to connect and resolve "
+              "material disagreement via VDS." % args.config)
+        return 0
+
+    from estate_scan.clients.auth import AuthError
+    from estate_scan.clients.live import LiveClient
+    from estate_scan.clients.vds import VdsExecutor
+    from estate_scan.derive.disagreement import resolve_material_disagreement
+
+    store = _existing_store(args.out)
+    run_id = _resolve_run(store)
+    config = _load_live_config(args.config)
+    client = LiveClient(config)
+    try:
+        client.connect()
+        client.detect_capabilities()
+        executor = VdsExecutor(client)
+        summary = resolve_material_disagreement(
+            store, run_id, executor, period=args.period, tolerance=args.tolerance)
+    except AuthError as exc:
+        raise SystemExit("estate-scan: %s" % exc)
+    finally:
+        # Sign out at the end of every run (spec: no lingering session).
+        client.close()
+    store.close()
+
+    if summary.get("skipped"):
+        print("resolve %s: VizQL Data Service not available on this site; "
+              "material disagreement recorded as skipped." % run_id)
+    else:
+        print("resolve %s: executed %d variant(s) across %d group(s); "
+              "%d group(s) show material disagreement."
+              % (run_id, summary["executed"], summary["groups"],
+                 summary["material_groups"]))
+    return 0
+
+
 # -- interview ---------------------------------------------------------------
 
 def cmd_interview(args):
@@ -268,6 +318,25 @@ def build_parser():
     p_scan.add_argument("--out", required=True,
                         help="output directory (holds estate.db and run.log)")
     p_scan.set_defaults(func=cmd_scan)
+
+    p_resolve = sub.add_parser(
+        "resolve",
+        help="resolve material disagreement between metric variants via VDS "
+             "(live, full-mode step; requires an earlier scan)")
+    p_resolve.add_argument("--config", required=True,
+                           help="path to the live-run config for the same site")
+    p_resolve.add_argument("--live", action="store_true",
+                           help="actually connect and resolve; without it, "
+                                "--config only validates the config")
+    p_resolve.add_argument("--out", required=True,
+                           help="output directory holding the scanned estate.db")
+    p_resolve.add_argument("--period", default="all",
+                           help="the fixed period the aggregates are computed "
+                                "for, agreed before results are shown")
+    p_resolve.add_argument("--tolerance", type=float, default=0.005,
+                           help="relative difference above which a variant pair "
+                                "counts as materially disagreeing")
+    p_resolve.set_defaults(func=cmd_resolve)
 
     p_int = sub.add_parser(
         "interview", help="load specialist interview responses from YAML")
