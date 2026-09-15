@@ -7,7 +7,7 @@
   "deployment_type": "cloud",
   "adoption_source": "fixture",
   "site": {
-   "luid": "f0b77ef7-0000-4000-8000-00000000000b",
+   "luid": "a6d24634-0000-4000-8000-00000000000b",
    "name": "hostile-site"
   },
   "core_metrics": [],
@@ -23,7 +23,7 @@
  "datasources": [
   {
    "id": "ds_0001",
-   "luid": "fa638f39-0000-4000-8000-000000000001",
+   "luid": "6fb56e59-0000-4000-8000-000000000001",
    "name": "Edge DS 1",
    "projectName": "Hostile",
    "isCertified": false,
@@ -35,7 +35,7 @@
    "hasExtracts": false,
    "upstreamTables": [
     {
-     "id": "2eb82cdf-0000-4000-8000-000000000002",
+     "id": "71f5f07b-0000-4000-8000-000000000002",
      "name": "t_edge_ds_1",
      "schema": "public",
      "fullName": "warehouse.public.t_190"
@@ -852,7 +852,7 @@
   },
   {
    "id": "ds_0002",
-   "luid": "fa638f39-0000-4000-8000-000000000003",
+   "luid": "6fb56e59-0000-4000-8000-000000000003",
    "name": "Edge DS 2",
    "projectName": "Hostile",
    "isCertified": false,
@@ -864,7 +864,7 @@
    "hasExtracts": true,
    "upstreamTables": [
     {
-     "id": "2eb82cdf-0000-4000-8000-000000000004",
+     "id": "71f5f07b-0000-4000-8000-000000000004",
      "name": "t_edge_ds_2",
      "schema": "public",
      "fullName": "warehouse.public.t_7"
@@ -1289,7 +1289,7 @@
  "workbooks": [
   {
    "id": "wb_0001",
-   "luid": "2622b8bc-0000-4000-8000-000000000005",
+   "luid": "06bc6a46-0000-4000-8000-000000000005",
    "name": "Hostile WB 0",
    "projectName": "Hostile",
    "createdAt": "2025-01-01T00:00:00Z",
@@ -1301,27 +1301,27 @@
    "upstreamDatasources": [
     {
      "id": "ds_0001",
-     "luid": "fa638f39-0000-4000-8000-000000000001",
+     "luid": "6fb56e59-0000-4000-8000-000000000001",
      "name": "Edge DS 1"
     }
    ],
    "embeddedDatasources": [],
    "sheets": [
     {
-     "id": "114718b0-0000-4000-8000-000000000006",
+     "id": "bc8e86af-0000-4000-8000-000000000006",
      "name": "Hostile WB 0 Sheet"
     }
    ],
    "dashboards": [
     {
-     "id": "c7a74c04-0000-4000-8000-000000000007",
+     "id": "f2ea32ee-0000-4000-8000-000000000007",
      "name": "Hostile WB 0 Dashboard"
     }
    ]
   },
   {
    "id": "wb_0002",
-   "luid": "2622b8bc-0000-4000-8000-000000000008",
+   "luid": "06bc6a46-0000-4000-8000-000000000008",
    "name": "Hostile WB 1",
    "projectName": "Hostile",
    "createdAt": "2025-01-01T00:00:00Z",
@@ -1333,20 +1333,20 @@
    "upstreamDatasources": [
     {
      "id": "ds_0002",
-     "luid": "fa638f39-0000-4000-8000-000000000003",
+     "luid": "6fb56e59-0000-4000-8000-000000000003",
      "name": "Edge DS 2"
     }
    ],
    "embeddedDatasources": [],
    "sheets": [
     {
-     "id": "114718b0-0000-4000-8000-000000000009",
+     "id": "bc8e86af-0000-4000-8000-000000000009",
      "name": "Hostile WB 1 Sheet"
     }
    ],
    "dashboards": [
     {
-     "id": "c7a74c04-0000-4000-8000-00000000000a",
+     "id": "f2ea32ee-0000-4000-8000-00000000000a",
      "name": "Hostile WB 1 Dashboard"
     }
    ]
@@ -1355,18 +1355,95 @@
  "usage_events": [
   {
    "workbook_id": "wb_0001",
-   "workbook_luid": "2622b8bc-0000-4000-8000-000000000005",
+   "workbook_luid": "06bc6a46-0000-4000-8000-000000000005",
    "views": 3,
-   "last_viewed_days_ago": 80
+   "last_viewed_days_ago": 80,
+   "user_id": "user34",
+   "event_date": "2025-06-13"
   },
   {
    "workbook_id": "wb_0002",
-   "workbook_luid": "2622b8bc-0000-4000-8000-000000000008",
+   "workbook_luid": "06bc6a46-0000-4000-8000-000000000008",
    "views": 15,
-   "last_viewed_days_ago": 11
+   "last_viewed_days_ago": 11,
+   "user_id": "user1",
+   "event_date": "2025-08-21"
   }
  ],
  "_meta_expected": {
   "sec01_count": 0
- }
+ },
+ "refresh_jobs": [
+  {
+   "task_id": "task_ds_0002",
+   "datasource_id": "ds_0002",
+   "scheduled_at": "2025-09-01T02:00:00Z",
+   "completed_at": "2025-09-01T02:05:00Z",
+   "status": "Success"
+  }
+ ],
+ "custom_sql": [
+  {
+   "id": "csql_0001",
+   "name": "Custom SQL 01",
+   "query": "SELECT order_id, amount FROM warehouse.public.fact_sales",
+   "downstreamDatasources": [
+    {
+     "id": "ds_0001",
+     "luid": "6fb56e59-0000-4000-8000-000000000001",
+     "name": "Edge DS 1"
+    }
+   ]
+  },
+  {
+   "id": "csql_0002",
+   "name": "Custom SQL 02",
+   "query": "SELECT region, SUM(amount) AS total FROM fact_sales GROUP BY region",
+   "downstreamDatasources": [
+    {
+     "id": "ds_0002",
+     "luid": "6fb56e59-0000-4000-8000-000000000003",
+     "name": "Edge DS 2"
+    }
+   ]
+  }
+ ],
+ "permissions": [
+  {
+   "object_type": "project",
+   "object_id": "prj_01",
+   "grantee_type": "group",
+   "grantee_id": "AllUsers",
+   "capability": "Read",
+   "mode": "Allow",
+   "sampled": 0
+  },
+  {
+   "object_type": "project",
+   "object_id": "prj_01",
+   "grantee_type": "group",
+   "grantee_id": "Analysts",
+   "capability": "Read",
+   "mode": "Allow",
+   "sampled": 0
+  },
+  {
+   "object_type": "project",
+   "object_id": "prj_01",
+   "grantee_type": "group",
+   "grantee_id": "Analysts",
+   "capability": "Write",
+   "mode": "Allow",
+   "sampled": 0
+  },
+  {
+   "object_type": "workbook",
+   "object_id": "wb_0001",
+   "grantee_type": "user",
+   "grantee_id": "user34",
+   "capability": "Delete",
+   "mode": "Allow",
+   "sampled": 1
+  }
+ ]
 }

@@ -1,0 +1,23 @@
+# Query: custom_sql
+# Custom-SQL grain (DF-07). A custom-SQL table carries hand-written SQL that
+# bypasses the modelled semantic layer, so its text -- length, a GROUP BY, a
+# user-context function -- is the grain-risk signal. A table can fan out to
+# several downstream published sources; we attribute it to the first, which is
+# enough for the signal. The SQL text is treated exactly like formula text: it
+# rides in the working build and is redacted from the presentation build.
+query custom_sql($first: Int!, $after: String) {
+  customSQLTablesConnection(first: $first, after: $after) {
+    nodes {
+      id
+      name
+      query
+      downstreamDatasources {
+        id
+        luid
+        name
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+    totalCount
+  }
+}

@@ -29,6 +29,7 @@ from estate_scan.clients.fixture import FixtureClient
 # LiveClient issues is `query Probe { __typename }`.
 _QUERY_NAMES = frozenset({
     "projects", "published_datasources", "workbooks", "datasource_fields",
+    "custom_sql",
 })
 _LINE_COMMENT = re.compile(r"#[^\n\r]*")
 _OP_NAME = re.compile(r"\b(?:query|mutation|subscription)\s+([A-Za-z_]\w*)")
@@ -59,8 +60,9 @@ class FixtureTransport(object):
                                  `detect_capabilities` aborts.
       * ``graphql_status``    -- non-200 for content queries; 401 surfaces as
                                  SESSION_EXPIRED (session-expiry test).
-      * ``rest_status``       -- status for REST probe GETs (default 403, which
-                                 matches the fixture's rest_jobs/rest_tasks=False).
+      * ``rest_status``       -- status for REST probe GETs (default 403, so the
+                                 live capability probe reports rest_jobs/rest_tasks
+                                 False even though the fixture client serves them).
     """
 
     def __init__(self, estate, api_version="3.24", partial_over=None,

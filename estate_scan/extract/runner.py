@@ -27,6 +27,7 @@ _CONN_KEY = {
     "projects": "projectsConnection",
     "published_datasources": "publishedDatasourcesConnection",
     "workbooks": "workbooksConnection",
+    "custom_sql": "customSQLTablesConnection",
 }
 
 # query name -> coverage measure name
@@ -35,17 +36,20 @@ _MEASURE = {
     "published_datasources": "datasources",
     "workbooks": "workbooks",
     "datasource_fields": "fields",
+    "custom_sql": "custom_sql",
 }
 
 # Global object-level shards, in the dependency order the spec mandates.
-_GLOBAL_ORDER = ["projects", "published_datasources", "workbooks"]
+# custom_sql is a global GraphQL shard (Metadata API), so it rides the same
+# object-shard loop as projects/datasources/workbooks -- appended last so a
+# resume mid-run through the earlier shards is unchanged.
+_GLOBAL_ORDER = ["projects", "published_datasources", "workbooks", "custom_sql"]
 
 # Measures deferred out of the prototype. Recorded as skipped so the report
 # renders them as unmeasured -- never as clean (coverage is first-class).
+# permissions / refresh_jobs / custom_sql graduated to measured in R2; the rest
+# stay deferred until their own milestones.
 _DEFERRED_MEASURES = [
-    ("permissions", "deferred: permissions sampler out of prototype scope"),
-    ("refresh_jobs", "deferred: refresh/job history out of prototype scope"),
-    ("custom_sql", "deferred: custom SQL extraction out of prototype scope"),
     ("database_tables", "deferred: database table/column extraction out of scope"),
     ("data_quality_warnings", "deferred: DQW extraction out of prototype scope"),
     ("query_execution", "full mode only; scan mode never executes queries"),
@@ -73,6 +77,7 @@ class ExtractRunner(object):
         self.events = []            # type: List[str]
         self.subdivision_events = []  # type: List[tuple]
         self._manifest = queries.load_manifest()
+        self._capabilities = {}     # type: dict  # set from detect_capabilities()
 
     # -- logging -------------------------------------------------------------
     def _log(self, msg):
@@ -97,9 +102,9 @@ class ExtractRunner(object):
         self._log("run %s started (query_set=%s)"
                   % (self.run_id, self._manifest.get("query_set_version")))
         if hasattr(self.client, "detect_capabilities"):
-            self.client.detect_capabilities()
+            self._capabilities = self.client.detect_capabilities() or {}
 
-        # 1-3. Global object shards in dependency order.
+        # 1-4. Global object shards in dependency order (custom_sql last).
         for query_name in _GLOBAL_ORDER:
             hint = queries.shard_hint(query_name)
             shard = global_shard(query_name, hint)
@@ -107,22 +112,28 @@ class ExtractRunner(object):
             ok = self._run_shard(shard)
             self._record_measure(_MEASURE[query_name], shard, ok)
 
-        # 4. Field shards, one per published data source.
+        # 5. Field shards, one per published data source.
         self._run_field_shards()
 
-        # 5. REST usage events (served by the fixture; live source deferred).
+        # 6. REST usage events (adoption + adoption depth via user_id/event_date).
         self._run_usage_events()
 
-        # 6. Coverage limitations the client discovered at runtime (e.g. owner
+        # 7. REST refresh/job history -> freshness (capability-gated on tasks).
+        self._run_refresh_jobs()
+
+        # 8. REST permissions sampler (project-level all + content-level sample).
+        self._run_permissions()
+
+        # 9. Coverage limitations the client discovered at runtime (e.g. owner
         # attribution gaps on Server). Additive and backend-agnostic -- the
         # fixture client has no such notes.
         self._record_client_notes()
 
-        # 7. Deferred measures -> skipped, so nothing reads as clean.
+        # 10. Deferred measures -> skipped, so nothing reads as clean.
         for measure, reason in _DEFERRED_MEASURES:
             self.store.record_coverage(self.run_id, measure, "skipped", reason)
 
-        # 7. Finish + sign out.
+        # 11. Finish + sign out.
         cov = {row["measure"]: {"status": row["status"], "reason": row["reason"]}
                for row in self.store.coverage(self.run_id)}
         self.store.finish_run(self.run_id, _now(), json.dumps(cov, sort_keys=True))
@@ -167,17 +178,83 @@ class ExtractRunner(object):
         if not hasattr(self.client, "rest"):
             self.store.record_coverage(self.run_id, "usage_events", "skipped",
                                        "no REST transport")
+            self.store.record_coverage(self.run_id, "adoption_depth", "skipped",
+                                       "no usage events to derive per-user depth")
             return
         res = self.client.rest("usage_events")
         if not res.ok:
             self.store.record_coverage(self.run_id, "usage_events", "failed",
                                        "REST status %s" % res.status)
+            self.store.record_coverage(self.run_id, "adoption_depth", "skipped",
+                                       "usage events unavailable (REST status %s)"
+                                       % res.status)
             return
         self.store.load_usage_events(self.run_id, res.items)
         self.store.commit()
         self.store.record_coverage(self.run_id, "usage_events", "ok",
                                    "%d events" % len(res.items))
         self._log("usage_events: loaded %d events" % len(res.items))
+
+        # Adoption depth (ADO-01) rides on the same events: it is measurable only
+        # when they carry a per-user identity. If every event's user_id is NULL
+        # (the source gave aggregate view counts, not per-user rows) we cannot
+        # derive per-user penetration -> skipped, never a clean read.
+        with_user = sum(1 for e in res.items if e.get("user_id"))
+        if with_user:
+            self.store.record_coverage(
+                self.run_id, "adoption_depth", "ok",
+                "%d of %d events carry a user identity" % (with_user, len(res.items)))
+        else:
+            self.store.record_coverage(
+                self.run_id, "adoption_depth", "skipped",
+                "usage events carry no per-user identity (aggregate counts only)")
+
+    # -- refresh / job history -----------------------------------------------
+    def _run_refresh_jobs(self):
+        # type: () -> None
+        """Freshness (DF-05/06) from refresh task history. Capability-gated on
+        `rest_tasks`: a site without the task/schedule REST surface (e.g. a
+        Metadata-only probe, or the offline live path where REST GETs 403) is
+        recorded `skipped`, never clean."""
+        if not hasattr(self.client, "rest"):
+            self.store.record_coverage(self.run_id, "refresh_jobs", "skipped",
+                                       "no REST transport")
+            return
+        if not self._capabilities.get("rest_tasks"):
+            self.store.record_coverage(self.run_id, "refresh_jobs", "skipped",
+                                       "refresh task/schedule REST API not available")
+            return
+        res = self.client.rest("extract_refresh_tasks")
+        if not res.ok:
+            self.store.record_coverage(self.run_id, "refresh_jobs", "failed",
+                                       "REST status %s" % res.status)
+            return
+        self.store.load_refresh_jobs(self.run_id, res.items)
+        self.store.commit()
+        self.store.record_coverage(self.run_id, "refresh_jobs", "ok",
+                                   "%d refresh records" % len(res.items))
+        self._log("refresh_jobs: loaded %d records" % len(res.items))
+
+    # -- permissions sampler -------------------------------------------------
+    def _run_permissions(self):
+        # type: () -> None
+        """Permission exposure (SEC-02, governance) via the REST permissions
+        surface. Unconditional REST like usage_events: available on the fixture,
+        unregistered on the offline live path (-> 501 -> failed), never clean."""
+        if not hasattr(self.client, "rest"):
+            self.store.record_coverage(self.run_id, "permissions", "skipped",
+                                       "no REST transport")
+            return
+        res = self.client.rest("permissions")
+        if not res.ok:
+            self.store.record_coverage(self.run_id, "permissions", "failed",
+                                       "REST status %s" % res.status)
+            return
+        self.store.load_permissions(self.run_id, res.items)
+        self.store.commit()
+        self.store.record_coverage(self.run_id, "permissions", "ok",
+                                   "%d permission grants" % len(res.items))
+        self._log("permissions: loaded %d grants" % len(res.items))
 
     # -- client-discovered coverage -----------------------------------------
     def _record_client_notes(self):
@@ -290,6 +367,8 @@ class ExtractRunner(object):
             self.store.load_workbooks(self.run_id, nodes)
         elif q == "datasource_fields":
             self.store.load_fields(self.run_id, shard.scope_id, nodes)
+        elif q == "custom_sql":
+            self.store.load_custom_sql(self.run_id, nodes)
         else:
             raise ValueError("no loader for query %r" % q)
 

@@ -43,6 +43,16 @@
         "cursor_var": "after",
         "first_var": "first"
       }
+    },
+    "custom_sql": {
+      "file": "v1/custom_sql.graphql",
+      "sha256": "e77cc9329da8e2a63dde9c3d38da19bdf285d7f7bdd52606c28248ad56260806",
+      "shard": {
+        "scope": "global",
+        "page_size": 500,
+        "cursor_var": "after",
+        "first_var": "first"
+      }
     }
   },
   "rest": {
@@ -50,6 +60,16 @@
       "description": "Per-workbook view counts and per-user activity over the retention window. Live source is Admin Insights (Cloud) or the repository (Server); both are deferred out of the prototype. Served offline by the fixture client so ranking, EST-01 and ADO-02 work without network access.",
       "live_source": "admin_insights|repository",
       "adoption_source_default": "unavailable",
+      "deferred_live": true
+    },
+    "extract_refresh_tasks": {
+      "description": "Extract-refresh task and schedule history -> freshness (DF-05/06). Capability-gated on rest_tasks; a Metadata-only site records freshness as skipped. Served offline by the fixture client.",
+      "live_source": "rest_tasks",
+      "deferred_live": true
+    },
+    "permissions": {
+      "description": "Per-object permission grants (SEC-02, governance). Project-level grants in full; content-level grants sampled with the basis recorded in run metadata. Served offline by the fixture client.",
+      "live_source": "rest_permissions",
       "deferred_live": true
     }
   }

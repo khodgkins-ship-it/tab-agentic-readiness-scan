@@ -1,4 +1,8 @@
 {
+  "adoption_depth": {
+    "distinct_users": 2,
+    "events_with_user": 2
+  },
   "core_metrics": [],
   "counts": {
     "calculated_fields": 25,
@@ -6,6 +10,11 @@
     "fields_total": 69,
     "projects": 1,
     "workbooks": 2
+  },
+  "custom_sql": {
+    "count": 2,
+    "with_group_by": 1,
+    "with_user_function": 0
   },
   "depth_histogram": {
     "-1": 2,
@@ -67,6 +76,11 @@
   },
   "metric_groups": {},
   "nested_calc_max_depth": 14,
+  "permissions": {
+    "count": 4,
+    "project_level": 3,
+    "sampled": 1
+  },
   "profile": "hostile",
   "provenance": {
     "max_published_on_published_depth": 0,
@@ -74,6 +88,10 @@
     "sources_without_upstream": 0
   },
   "query_set_version": "v1",
+  "refresh_jobs": {
+    "count": 1,
+    "failed": 0
+  },
   "sec01_expected": false,
   "seed": 1301,
   "tool_version": "0.1.0",

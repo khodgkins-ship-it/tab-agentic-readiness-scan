@@ -66,8 +66,8 @@ class FixtureClient(EstateClient):
         # type: () -> Dict[str, bool]
         self.capabilities = {
             "metadata_api": True,
-            "rest_jobs": False,          # deferred out of prototype
-            "rest_tasks": False,
+            "rest_jobs": True,           # refresh/job history served by the fixture
+            "rest_tasks": True,          # extract-refresh tasks served by the fixture
             "admin_insights": False,     # usage served via the fixture instead
             "repository": False,
             "vizql_data_service": False,
@@ -134,6 +134,20 @@ class FixtureClient(EstateClient):
                        for s in wb.get("sheets", [])],
             "dashboards": [{"id": d.get("id"), "name": d.get("name")}
                            for d in wb.get("dashboards", [])],
+        }
+
+    @staticmethod
+    def _p_customsql(cs):
+        # Public shape of a CustomSQLTable node. `query` carries the raw SQL --
+        # treated like formula text downstream (full in the working build,
+        # redacted from the presentation build). `_`-prefixed fixture keys never
+        # leak out.
+        return {
+            "id": cs["id"], "name": cs.get("name"),
+            "query": cs.get("query", ""),
+            "downstreamDatasources": [
+                {"id": d.get("id"), "luid": d.get("luid"), "name": d.get("name")}
+                for d in cs.get("downstreamDatasources", [])],
         }
 
     def _sheets_used_in(self, field):
@@ -220,6 +234,10 @@ class FixtureClient(EstateClient):
             return self._connection("workbooks", "workbooksConnection",
                                     self._estate.get("workbooks", []),
                                     self._p_workbook, v)
+        if query_name == "custom_sql":
+            return self._connection("custom_sql", "customSQLTablesConnection",
+                                    self._estate.get("custom_sql", []),
+                                    self._p_customsql, v)
         if query_name == "datasource_fields":
             return self._datasource_fields(v)
         return classify_graphql(400, {"error": "unknown query: %s" % query_name})
@@ -266,6 +284,16 @@ class FixtureClient(EstateClient):
         # type: (str, Optional[dict]) -> RestResult
         if resource == "usage_events":
             items = [dict(u) for u in self._estate.get("usage_events", [])]
+            return RestResult(200, items=items, total_available=len(items),
+                              has_more=False, next_page=None,
+                              raw={"resource": resource})
+        if resource == "extract_refresh_tasks":
+            items = [dict(j) for j in self._estate.get("refresh_jobs", [])]
+            return RestResult(200, items=items, total_available=len(items),
+                              has_more=False, next_page=None,
+                              raw={"resource": resource})
+        if resource == "permissions":
+            items = [dict(p) for p in self._estate.get("permissions", [])]
             return RestResult(200, items=items, total_available=len(items),
                               has_more=False, next_page=None,
                               raw={"resource": resource})

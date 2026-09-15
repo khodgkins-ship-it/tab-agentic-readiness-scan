@@ -1,4 +1,8 @@
 {
+  "adoption_depth": {
+    "distinct_users": 40,
+    "events_with_user": 850
+  },
   "core_metrics": [
     "revenue",
     "active_customer",
@@ -12,6 +16,11 @@
     "fields_total": 2744,
     "projects": 10,
     "workbooks": 1000
+  },
+  "custom_sql": {
+    "count": 12,
+    "with_group_by": 4,
+    "with_user_function": 4
   },
   "depth_histogram": {
     "1": 101,
@@ -129,6 +138,11 @@
     }
   },
   "nested_calc_max_depth": 4,
+  "permissions": {
+    "count": 80,
+    "project_level": 30,
+    "sampled": 50
+  },
   "profile": "median",
   "provenance": {
     "max_published_on_published_depth": 2,
@@ -136,6 +150,10 @@
     "sources_without_upstream": 3
   },
   "query_set_version": "v1",
+  "refresh_jobs": {
+    "count": 103,
+    "failed": 13
+  },
   "sec01_expected": true,
   "seed": 42,
   "tool_version": "0.1.0",

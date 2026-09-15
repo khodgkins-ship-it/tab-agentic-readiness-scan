@@ -12,6 +12,7 @@ the build brief's required properties against that measurement. If an estate
 drifts from spec, generation raises rather than writing a wrong fixture.
 """
 
+import datetime
 import json
 import os
 import random
@@ -30,6 +31,31 @@ SEEDS = {"median": 42, "small": 7, "hostile": 1301}
 USER_CONTEXT_FUNCS = ["USERNAME", "ISMEMBEROF", "FULLNAME", "USERDOMAIN"]
 
 _UC_RE = re.compile(r"\b(" + "|".join(USER_CONTEXT_FUNCS) + r")\s*\(", re.IGNORECASE)
+
+# R2 fixtures ---------------------------------------------------------------
+# Fixed reference date so usage/refresh timestamps are byte-reproducible (never
+# datetime.today()). All R2 dates are derived relative to this.
+_REFERENCE_DATE = datetime.date(2025, 9, 1)
+
+# Custom-SQL grain signals. These MIRROR the loader's regexes
+# (estate_scan/store/load.py `_SQL_GROUP_BY_RE` / `_SQL_USER_FUNC_RE`) so the
+# manifest's ground-truth counts match what the loader records; an acceptance
+# test cross-checks the two, catching any drift.
+_SQL_GROUP_BY_RE = re.compile(r"\bGROUP\s+BY\b", re.IGNORECASE)
+_SQL_USER_FUNC_RE = re.compile(
+    r"\b(?:CURRENT_USER|SESSION_USER|SYSTEM_USER)\b|\b(?:USER|USERNAME)\s*\(",
+    re.IGNORECASE)
+
+# Hand-written SQL shapes: plain, grain-changing (GROUP BY), and row-level
+# security baked into SQL (a user-context function). DF-07 needs all three.
+_CUSTOM_SQL_TEMPLATES = [
+    "SELECT order_id, amount FROM warehouse.public.fact_sales",
+    "SELECT region, SUM(amount) AS total FROM fact_sales GROUP BY region",
+    "SELECT * FROM orders WHERE created_by = CURRENT_USER",
+    "SELECT customer_id, COUNT(*) AS n FROM events GROUP BY customer_id",
+    "SELECT * FROM ledger WHERE owner = USER()",
+    "SELECT id, name, status FROM dim_customer",
+]
 
 # Rich column set for variant-hosting data sources; formulas below reference
 # only these. Filler sources get a smaller generic set to keep the JSON small.
@@ -714,6 +740,95 @@ def _ground_depth(ds):
             for f in ds["fields"] if f["_is_calculated"]}
 
 
+def _enrich_r2(estate, seed):
+    # type: (dict, int) -> None
+    """R2: add refresh_jobs / custom_sql / permissions and enrich usage_events
+    with a per-user identity + event date.
+
+    Runs AFTER the profile builder has fully consumed its own RNG stream, using a
+    dedicated Random(seed + offset). This is deliberate: inserting rng calls into
+    a builder mid-stream would shift every downstream draw and break the byte-for
+    -byte fixtures and `_assert_profile`. Everything here is pure derivation over
+    the already-built estate (fixed reference date, estate iteration order), so it
+    is uniform across all three profiles and reproducible."""
+    rng = random.Random(seed + 90210)
+    datasources = estate.get("datasources", [])
+    workbooks = estate.get("workbooks", [])
+    projects = estate.get("projects", [])
+
+    # -- usage_events: per-user identity + event date -----------------------
+    # ADO-01's ceiling: depth is measurable only when an event carries a user.
+    # Viewed workbooks attribute to their owner; zero-view rows stay identity-
+    # and date-less (last_viewed_days_ago is None there).
+    owner_by_wb = {wb["id"]: (wb.get("owner") or {}).get("username")
+                   for wb in workbooks}
+    for u in estate.get("usage_events", []):
+        u["user_id"] = owner_by_wb.get(u.get("workbook_id")) if u.get("views", 0) > 0 else None
+        days = u.get("last_viewed_days_ago")
+        u["event_date"] = (
+            None if days is None
+            else (_REFERENCE_DATE - datetime.timedelta(days=int(days))).isoformat())
+
+    # -- refresh_jobs: one per extract-backed source ------------------------
+    # Freshness spread (DF-05/06): mostly fresh, some stale, a few failed.
+    refresh_jobs = []  # type: List[dict]
+    for ds in datasources:
+        if not ds.get("hasExtracts"):
+            continue
+        roll = rng.random()
+        if roll < 0.7:
+            days_ago, status = rng.randint(0, 2), "Success"
+        elif roll < 0.9:
+            days_ago, status = rng.randint(10, 60), "Success"   # stale
+        else:
+            days_ago, status = rng.randint(1, 30), "Failed"
+        day = (_REFERENCE_DATE - datetime.timedelta(days=days_ago)).isoformat()
+        refresh_jobs.append({
+            "task_id": "task_%s" % ds["id"],
+            "datasource_id": ds["id"],
+            "scheduled_at": day + "T02:00:00Z",
+            "completed_at": day + "T02:05:00Z",
+            "status": status,
+        })
+    estate["refresh_jobs"] = refresh_jobs
+
+    # -- custom_sql: hand-written SQL tables --------------------------------
+    n_cs = min(2 * len(_CUSTOM_SQL_TEMPLATES), len(datasources)) if datasources else 0
+    custom_sql = []  # type: List[dict]
+    for i in range(n_cs):
+        ds = datasources[i % len(datasources)]
+        custom_sql.append({
+            "id": "csql_%04d" % (i + 1),
+            "name": "Custom SQL %02d" % (i + 1),
+            "query": _CUSTOM_SQL_TEMPLATES[i % len(_CUSTOM_SQL_TEMPLATES)],
+            "downstreamDatasources": [
+                {"id": ds["id"], "luid": ds["luid"], "name": ds["name"]}],
+        })
+    estate["custom_sql"] = custom_sql
+
+    # -- permissions: project-level (all) + content-level (sampled) ---------
+    permissions = []  # type: List[dict]
+    for pj in projects:
+        for grantee, grant_caps in (("group:AllUsers", ["Read"]),
+                                    ("group:Analysts", ["Read", "Write"])):
+            gtype, gid = grantee.split(":")
+            for cap in grant_caps:
+                permissions.append({
+                    "object_type": "project", "object_id": pj["id"],
+                    "grantee_type": gtype, "grantee_id": gid,
+                    "capability": cap, "mode": "Allow", "sampled": 0})
+    sample_n = max(1, len(workbooks) // 20) if workbooks else 0
+    for wb in workbooks[:sample_n]:
+        permissions.append({
+            "object_type": "workbook", "object_id": wb["id"],
+            "grantee_type": "user",
+            "grantee_id": (wb.get("owner") or {}).get("username") or "user0",
+            "capability": rng.choice(["Read", "Write", "Delete", "ChangePermissions"]),
+            "mode": rng.choice(["Allow", "Deny"]),
+            "sampled": 1})
+    estate["permissions"] = permissions
+
+
 def measure(estate):
     # type: (dict) -> dict
     dss = estate["datasources"]
@@ -841,6 +956,35 @@ def measure(estate):
         "flags_expected": {},
     }
 
+    # R2 extraction ground truth (counts only; no thresholds tuned here). Keyed
+    # so the acceptance tests can cross-check the loaded tables against them.
+    cs = estate.get("custom_sql", [])
+    rj = estate.get("refresh_jobs", [])
+    perms = estate.get("permissions", [])
+    manifest["custom_sql"] = {
+        "count": len(cs),
+        "with_group_by": sum(1 for c in cs
+                             if _SQL_GROUP_BY_RE.search(c.get("query", ""))),
+        "with_user_function": sum(1 for c in cs
+                                  if _SQL_USER_FUNC_RE.search(c.get("query", ""))),
+    }
+    manifest["refresh_jobs"] = {
+        "count": len(rj),
+        "failed": sum(1 for j in rj if j.get("status") == "Failed"),
+    }
+    manifest["permissions"] = {
+        "count": len(perms),
+        "project_level": sum(1 for p in perms if p.get("object_type") == "project"),
+        "sampled": sum(1 for p in perms if p.get("sampled")),
+    }
+    usage_users = set(u.get("user_id") for u in estate["usage_events"]
+                      if u.get("user_id"))
+    manifest["adoption_depth"] = {
+        "events_with_user": sum(1 for u in estate["usage_events"]
+                                if u.get("user_id")),
+        "distinct_users": len(usage_users),
+    }
+
     # Expected flag firing for the prototype flag set (M5 asserts against this).
     fe = manifest["flags_expected"]
     fe["SEC-01"] = {"fires": uc > 0, "count": uc}
@@ -877,6 +1021,7 @@ def build(profile, seed=None):
     if seed is None:
         seed = SEEDS[profile]
     estate = BUILDERS[profile](seed)
+    _enrich_r2(estate, seed)   # additive: refresh_jobs/custom_sql/permissions + usage identity
     manifest = measure(estate)
     _assert_profile(profile, estate, manifest)
     return estate, manifest

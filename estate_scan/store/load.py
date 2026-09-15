@@ -11,10 +11,19 @@ concern; write-locally is this module's only job.
 
 import json
 import os
+import re
 import sqlite3
 from typing import Dict, List, Optional, Tuple
 
 _SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
+
+# Custom-SQL grain signals (DF-07). Matched against the raw query text: a GROUP
+# BY changes the row grain, and a user-context function bakes a row-level
+# security decision into hand-written SQL that bypasses the modelled layer.
+_SQL_GROUP_BY_RE = re.compile(r"\bGROUP\s+BY\b", re.IGNORECASE)
+_SQL_USER_FUNC_RE = re.compile(
+    r"\b(?:CURRENT_USER|SESSION_USER|SYSTEM_USER)\b|\b(?:USER|USERNAME)\s*\(",
+    re.IGNORECASE)
 
 
 def _b(value):
@@ -258,6 +267,53 @@ class Store(object):
                  e.get("user_id"), e.get("event_date"),
                  e.get("views", e.get("event_count")),
                  e.get("last_viewed_days_ago")))
+        return len(items)
+
+    def load_custom_sql(self, run_id, nodes):
+        # type: (str, List[dict]) -> int
+        """Custom-SQL tables (DF-07). A table can fan out to several downstream
+        published sources; we attribute it to the first (enough for the grain
+        signal). The query text rides here exactly like formula text -- full in
+        the working build, redacted from the presentation build downstream."""
+        for n in nodes:
+            q = n.get("query") or ""
+            downstream = n.get("downstreamDatasources") or []
+            ds_id = downstream[0].get("id") if downstream else None
+            self.conn.execute(
+                "INSERT OR REPLACE INTO custom_sql "
+                "(run_id, id, query, datasource_id, char_length, "
+                " has_group_by, has_user_function) VALUES (?,?,?,?,?,?,?)",
+                (run_id, n["id"], q, ds_id, len(q),
+                 _b(bool(_SQL_GROUP_BY_RE.search(q))),
+                 _b(bool(_SQL_USER_FUNC_RE.search(q)))))
+        return len(nodes)
+
+    def load_refresh_jobs(self, run_id, items):
+        # type: (str, List[dict]) -> int
+        """Refresh/extract task history -> freshness (DF-05/06). One row per
+        task; `completed_at` and `status` carry the freshness signal."""
+        for j in items:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO refresh_jobs "
+                "(run_id, task_id, datasource_id, scheduled_at, completed_at, "
+                " status) VALUES (?,?,?,?,?,?)",
+                (run_id, j.get("task_id"), j.get("datasource_id"),
+                 j.get("scheduled_at"), j.get("completed_at"), j.get("status")))
+        return len(items)
+
+    def load_permissions(self, run_id, items):
+        # type: (str, List[dict]) -> int
+        """Permission grants (SEC-02, governance). Project-level grants are
+        recorded in full; content-level grants are sampled, so each row carries
+        a `sampled` flag and the sampling basis lives in run metadata."""
+        for p in items:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO permissions "
+                "(run_id, object_type, object_id, grantee_type, grantee_id, "
+                " capability, mode, sampled) VALUES (?,?,?,?,?,?,?,?)",
+                (run_id, p.get("object_type"), p.get("object_id"),
+                 p.get("grantee_type"), p.get("grantee_id"),
+                 p.get("capability"), p.get("mode"), _b(p.get("sampled"))))
         return len(items)
 
     # -- derive: read fields, write resolved formulas & refs -----------------
