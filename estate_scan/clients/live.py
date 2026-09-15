@@ -104,6 +104,19 @@ class LiveClient(EstateClient):
         self._session_started = self._clock()
         return self
 
+    @property
+    def credential_source(self):
+        # type: () -> Optional[str]
+        """Where the PAT secret came from ("env"|"keyring"). Never the secret."""
+        return getattr(self._creds, "source", None)
+
+    @property
+    def is_signed_out(self):
+        # type: () -> bool
+        """True once close() has run: the token has been released locally (and a
+        best-effort signout POSTed). Read by the live-smoke summary."""
+        return self._closed
+
     def _auth_headers(self):
         # type: () -> Dict[str, str]
         return {"X-Tableau-Auth": self._token or ""}

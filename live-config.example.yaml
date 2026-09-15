@@ -1,0 +1,24 @@
+# Example live-run config for `estate-scan smoke|scan --config ... --live`.
+#
+# Copy this to a real file you keep LOCAL (it is gitignored as live-config.*),
+# fill in your host/site, then run. The credential SECRET is deliberately NOT
+# here -- it comes from the environment or the OS keychain:
+#
+#     cp live-config.example.yaml live-config.yaml
+#     # edit live-config.yaml: set host, site_content_url, pat_name
+#     export ESTATE_SCAN_PAT_NAME=<your PAT name>
+#     export ESTATE_SCAN_PAT_SECRET=<your PAT secret>
+#     .venv/bin/python -m estate_scan smoke --config live-config.yaml --live
+#
+# Putting a PAT secret in this file is a hard error: the CLI secret-scans the
+# config before connecting and aborts (naming the offending key, never the value).
+
+host: https://REPLACE-ME.online.tableau.com   # Tableau Cloud pod, or https://tableau.mycorp.com for Server
+site_content_url: ""                          # "" = the default site; otherwise the site's contentUrl
+deployment_type: cloud                        # cloud | server
+
+pat_name: estate-scan-readonly                # the PAT's NAME (non-secret label); the secret goes in the env var
+
+# api_version: "3.24"                          # optional: pin the REST API version; omitted = negotiated per host
+# timeout_seconds: 60
+# session_refresh_seconds: 3000

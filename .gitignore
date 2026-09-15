@@ -23,5 +23,15 @@ venv/
 *.pat
 /secrets/
 
+# Filled-in live-run configs stay local (host/site are environment-specific and
+# not for the repo). The committed template is live-config.example.yaml.
+/live-config.yaml
+/live-config.yml
+/live-config.json
+/live-config.*.yaml
+/live-config.*.yml
+/live-config.*.json
+!/live-config.example.yaml
+
 # Local Claude Code permissions (personal, machine-specific)
 .claude/settings.local.json

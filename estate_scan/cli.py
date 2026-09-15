@@ -222,6 +222,51 @@ def cmd_resolve(args):
     return 0
 
 
+# -- smoke (guarded live connectivity self-test) -----------------------------
+
+def cmd_smoke(args):
+    # type: (argparse.Namespace) -> int
+    """R6 guarded live-smoke: a read-only connectivity self-test against a real
+    Tableau site. Off by default and never runs in CI:
+
+      * ``--config`` alone loads + secret-scans + validates the config and prints
+        what it *would* do -- it never connects (same two-step as `scan`);
+      * ``--config --live`` connects and runs the read-only self-test;
+      * credentials come only from ``ESTATE_SCAN_PAT_NAME`` / ``ESTATE_SCAN_PAT_SECRET``
+        (or the OS keychain), so a checkout with none set -- as in CI -- can never
+        reach a real site.
+
+    It reuses the production `LiveClient` + `ExtractRunner`, so all three
+    read-only gates and partial-response subdivision apply unchanged. It persists
+    to an in-memory store that is discarded, and emits no report."""
+    config = _load_live_config(args.config)
+    if not args.live:
+        print("smoke: config %s is valid. This command CONNECTS to a real "
+              "Tableau site and runs a read-only self-test." % args.config)
+        print("  Re-run with --live to connect. Credentials come from "
+              "ESTATE_SCAN_PAT_NAME / ESTATE_SCAN_PAT_SECRET or the OS keychain, "
+              "never the config file.")
+        return 0
+
+    from estate_scan.clients.auth import AuthError
+    from estate_scan.clients.live import LiveClient
+    from estate_scan.smoke import render_smoke_report, run_smoke
+
+    client = LiveClient(config)
+    try:
+        client.connect()
+        summary = run_smoke(client)
+    except AuthError as exc:
+        client.close()
+        raise SystemExit("estate-scan: %s" % exc)
+    finally:
+        # Idempotent belt-and-braces sign-out (run_smoke already signs out).
+        client.close()
+
+    print(render_smoke_report(summary, verbose=args.verbose))
+    return 0 if summary.get("signed_out") else 1
+
+
 # -- interview ---------------------------------------------------------------
 
 def cmd_interview(args):
@@ -380,6 +425,19 @@ def build_parser():
                            help="relative difference above which a variant pair "
                                 "counts as materially disagreeing")
     p_resolve.set_defaults(func=cmd_resolve)
+
+    p_smoke = sub.add_parser(
+        "smoke",
+        help="guarded read-only connectivity self-test against a real site "
+             "(off by default, never in CI; requires --live and env credentials)")
+    p_smoke.add_argument("--config", required=True,
+                         help="path to the live-run config for the site to test")
+    p_smoke.add_argument("--live", action="store_true",
+                         help="actually connect and run the self-test; without "
+                              "it, --config only validates the config")
+    p_smoke.add_argument("--verbose", action="store_true",
+                         help="also print the per-shard run log")
+    p_smoke.set_defaults(func=cmd_smoke)
 
     p_int = sub.add_parser(
         "interview", help="load specialist interview responses from YAML")
