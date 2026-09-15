@@ -16,5 +16,12 @@ venv/
 # OS
 .DS_Store
 
+# Credentials must never enter the tree (env var / OS keychain only). Ignore the
+# local PAT file and a credential-file convention so `git add -A` can't commit a
+# secret. Kept narrow so it can't shadow a source/test file.
+/Demoverse PAT
+*.pat
+/secrets/
+
 # Local Claude Code permissions (personal, machine-specific)
 .claude/settings.local.json
