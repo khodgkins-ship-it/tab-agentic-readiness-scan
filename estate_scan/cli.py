@@ -342,6 +342,42 @@ def cmd_report(args):
     return 0
 
 
+# -- calibrate ---------------------------------------------------------------
+
+def cmd_calibrate(args):
+    # type: (argparse.Namespace) -> int
+    """R6 calibration harness: emit the real distributions behind the
+    provisional thresholds for a completed run, so they get set from live data
+    later (build brief section 7). Reads the store an earlier `scan` populated;
+    connects nowhere, mutates nothing, and proposes no threshold -- it shows the
+    observed spread next to the line currently drawn, coverage-aware so an
+    unmeasured dimension reads as "not measured", never as clean."""
+    from estate_scan.calibrate import (collect_calibration,
+                                       render_calibration_markdown)
+    store = _existing_store(args.out)
+    run_id = _resolve_run(store)
+    summary = collect_calibration(store, run_id)
+    store.close()
+    md = render_calibration_markdown(summary)
+
+    if args.stdout:
+        sys.stdout.write(md)
+        return 0
+    if not os.path.isdir(args.out):
+        os.makedirs(args.out)
+    out_path = os.path.join(args.out, "calibration.md")
+    with open(out_path, "w", encoding="utf-8") as fh:
+        fh.write(md)
+    print("calibrate %s: wrote %s" % (run_id, out_path))
+    for s in summary["sections"]:
+        if s.get("measured"):
+            print("  %-22s measured" % s["key"])
+        else:
+            print("  %-22s not measured (%s: %s)"
+                  % (s["key"], s["coverage_measure"], s["coverage_status"]))
+    return 0
+
+
 # -- compare -----------------------------------------------------------------
 
 def cmd_compare(args):
@@ -466,6 +502,18 @@ def build_parser():
                                "findings and coverage with no stage/score "
                                "language, for accounts that reject a ladder")
     p_report.set_defaults(func=cmd_report)
+
+    p_cal = sub.add_parser(
+        "calibrate",
+        help="emit the real distributions behind the provisional thresholds "
+             "from a completed run (offline; connects nowhere; proposes no "
+             "threshold)")
+    p_cal.add_argument("--out", required=True,
+                       help="output directory holding the scanned estate.db")
+    p_cal.add_argument("--stdout", action="store_true",
+                       help="print the report to stdout instead of writing "
+                            "calibration.md into --out")
+    p_cal.set_defaults(func=cmd_calibrate)
 
     p_compare = sub.add_parser(
         "compare",
