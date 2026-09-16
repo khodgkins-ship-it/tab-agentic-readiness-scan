@@ -1,6 +1,91 @@
 # Tableau Estate Scan
 
-Specification set for a tool that reads a Tableau estate through its APIs and produces an agentic analytics readiness assessment.
+Read-only scan of a Tableau Cloud/Server estate that produces an agentic-analytics readiness assessment: seven dimensions scored against a per-domain target stage, the binding constraint named rather than a composite score, coverage first-class, and a self-contained offline report.
+
+The tool is the `estate_scan/` Python package. The numbered specification documents below define the framework it scores against, the methodology, and the decisions behind the build.
+
+## Getting the code
+
+Requires **Python 3.9 or newer** (developed and tested through 3.14). The only runtime dependencies are `httpx`, `jinja2`, `openpyxl`, and `pyyaml`; SQLite is used through the standard library.
+
+```bash
+git clone <repository-url>        # the tab-agentic-readiness-scan repository
+cd tab-agentic-readiness-scan
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -e .                   # installs deps and the `estate_scan` command
+```
+
+That's everything the offline path needs — no Tableau access, no credentials. To run the test suite (all offline, no network):
+
+```bash
+pip install -e ".[dev]"
+python -m pytest -q
+```
+
+Every command below is also available as `python -m estate_scan …` if you prefer not to rely on the installed console script.
+
+## Running an assessment
+
+The pipeline is four stages sharing one SQLite store under the output directory: `scan → interview → score → report`. `scan` takes its data from either a recorded fixture (offline) or a live Tableau site; the later stages read whatever the most recent `scan` left in the store, so a single run needs no run-id plumbing.
+
+### Try it offline (no Tableau access)
+
+Three bundled fixtures — `small`, `median`, `hostile` — replay a recorded estate with no network calls:
+
+```bash
+estate_scan scan   --fixture tests/fixtures/median --out out/demo
+estate_scan score  --out out/demo
+estate_scan report --out out/demo
+```
+
+`report` writes five artifacts into `out/demo/`: `findings.json`, `report.md`, `variants.xlsx`, and two self-contained HTML builds. Open `report.presentation.html` in a browser (it works straight from `file://`, with no network) — it is the redacted, shareable build. `report.working.html` carries full detail (resolved formulas, owner names) and is the one that stays with the analytics team. Add `--framing light` to render the same findings with no stage or score language, for accounts that reject a maturity ladder.
+
+The `interview` step is optional for a fixture run; `score` runs without it.
+
+### Scan a real Tableau site
+
+The live path is read-only, enforced in code, and needs a **read-only Personal Access Token**. It is deliberately two-step so pointing the tool at a config can never silently connect.
+
+1. Copy the config template and fill in your site (the committed template is the only `live-config.*` file tracked; your filled-in copy stays local and gitignored):
+
+   ```bash
+   cp live-config.example.yaml live-config.yaml
+   # edit: host, site_content_url, deployment_type (cloud|server), pat_name
+   ```
+
+2. Provide the PAT **secret** through the environment — never in the config file:
+
+   ```bash
+   export ESTATE_SCAN_PAT_NAME="<your PAT name>"
+   export ESTATE_SCAN_PAT_SECRET="<your PAT secret>"
+   ```
+
+   (An OS keychain entry via the optional `keyring` package works too.)
+
+3. Validate the config without connecting anywhere:
+
+   ```bash
+   estate_scan scan --config live-config.yaml --out out/live
+   ```
+
+4. Connect and scan — the explicit `--live` opt-in is what actually reaches the site:
+
+   ```bash
+   estate_scan scan --config live-config.yaml --live --out out/live
+   ```
+
+5. Capture the specialist judgments no API can see (declared target stage, governance posture) in a YAML responses file — see `02-assessment-methodology.md` for the interview protocol — then load them, score, and emit the report:
+
+   ```bash
+   estate_scan interview --out out/live --file interview-responses.yaml
+   estate_scan score      --out out/live
+   estate_scan report     --out out/live
+   ```
+
+Three more subcommands support the live workflow: `resolve` (execute read-only VizQL Data Service queries to test material disagreement between metric variants — a full-mode step run with the analyst present), `smoke` (a guarded read-only connectivity self-test), and `calibrate` / `compare` (emit threshold distributions from a run, and diff two runs of one account over time). Run `estate_scan <command> --help` for the options on each.
+
+**Security notes.** Read-only is enforced structurally by three in-code gates, so the live client cannot issue a mutation. The PAT secret is only ever read from the environment or the OS keychain — putting a secret in the config file is a hard error (the CLI scans the config and aborts before any client is built, naming the offending key but never the value). The tool talks only to your own Tableau host, and the offline pass makes no external calls. Run the credential-bearing commands (`--live`, `smoke`, `resolve --live`) yourself in your own terminal.
 
 ## Read in this order
 
