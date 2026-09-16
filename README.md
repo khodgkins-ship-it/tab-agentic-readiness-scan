@@ -87,6 +87,30 @@ Three more subcommands support the live workflow: `resolve` (execute read-only V
 
 **Security notes.** Read-only is enforced structurally by three in-code gates, so the live client cannot issue a mutation. The PAT secret is only ever read from the environment or the OS keychain — putting a secret in the config file is a hard error (the CLI scans the config and aborts before any client is built, naming the offending key but never the value). The tool talks only to your own Tableau host, and the offline pass makes no external calls. Run the credential-bearing commands (`--live`, `smoke`, `resolve --live`) yourself in your own terminal.
 
+## Generating a narrative report or deck
+
+The tool emits findings; it does not write prose and it makes no model calls. To
+turn an assessment into a written readiness report or an executive presentation,
+hand the artifacts to an AI **of your own choosing** (Claude or otherwise),
+together with the instruction skill in [`skills/readiness-narrative/`](skills/readiness-narrative/).
+
+The tool never egresses anything — you do, on your own account, entirely separate
+from this build. So the choice of what to share, and with which model, is yours:
+
+1. Run the pipeline (`scan → score → report`) to produce `out/`.
+2. Share with your AI: `out/report.presentation.html` (the redacted, shareable
+   build) or `out/findings.json`, plus `skills/readiness-narrative/SKILL.md`.
+   Optionally add `01-maturity-framework-reference.md` and
+   `02-assessment-methodology.md` for depth.
+3. Ask for a narrative report, a presentation, or improvement recommendations.
+
+Prefer the **presentation** build for any hosted/third-party model — it carries
+no formulas or owner names. Share the **working** build only with a private or
+local model you trust to see business logic and names. The skill (`SKILL.md`)
+carries the full faithfulness contract it applies: no composite score,
+coverage-first honesty, per-domain readiness named by its binding constraint, and
+every figure grounded in the scan data.
+
 ## Read in this order
 
 **`01-maturity-framework-reference.md`**
