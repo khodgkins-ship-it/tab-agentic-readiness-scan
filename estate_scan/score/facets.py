@@ -132,6 +132,17 @@ def score_facet(facet_id, fdef, store, run_id, inputs):
     gates = fdef.get("gates", [])
     dimension = fdef["dimension"]
 
+    # Coverage guard (plan invariant 7). A facet derived from a source that was
+    # not measured must NOT read as an observed clean/low score. If any coverage
+    # measure this facet declares in `requires_coverage` is not `ok`, the facet
+    # is unmeasured -> None, so dimension_rollup omits its dimension rather than
+    # scoring over an empty table. This only bites on the live path (e.g. reach
+    # from usage_events that returned 501); on the fixtures usage_events is `ok`
+    # so the facet still scores.
+    for required in fdef.get("requires_coverage") or []:
+        if store.coverage_status(run_id, required) != "ok":
+            return None
+
     if "measure" in fdef:
         name = fdef["measure"]
         fn = MEASURES.get(name)

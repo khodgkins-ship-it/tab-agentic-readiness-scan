@@ -93,6 +93,28 @@ def test_removing_the_target_emits_facets_and_no_rollup():
     assert facets["adoption.reach"]["score"] == 4
 
 
+# -- coverage honesty: unmeasured usage is not low reach (plan invariant 7) --
+
+def test_reach_drops_out_when_usage_events_not_ok():
+    """adoption.reach derives from content_activation over the usage table. If
+    usage_events did not measure (e.g. REST 501 on the live path), that table is
+    empty and a score would read as "hardly anyone uses this" -- a false low.
+    The `requires_coverage` guard must drop the facet so its dimension reports
+    as unscored, not clean. The fixtures record usage_events `ok`, so the guard
+    only bites when coverage is flipped."""
+    store, config = _scored_store("median")
+
+    # Baseline: usage_events is `ok` on the fixture, so reach scores.
+    assert store.coverage_status("r", "usage_events") == "ok"
+    assert "adoption.reach" in _facet_scores(score(store, "r", config=config))
+
+    # Flip the coverage row to a live-path failure and re-score.
+    store.record_coverage("r", "usage_events", "failed", "REST status 501")
+    facets = _facet_scores(score(store, "r", config=config))
+    assert "adoption.reach" not in facets, \
+        "unmeasured usage must not produce an observed reach score"
+
+
 # -- acceptance: interview never overwrites the scan (INT-01) ----------------
 
 def test_interview_claiming_stronger_raises_int01_without_overwriting():
@@ -232,6 +254,29 @@ def test_governance_capped_by_the_weakest_active_arc():
     assert governance_score(scores, ARCS, 5) == 4
 
 
+def test_governance_unscored_when_an_active_arc_has_no_reading():
+    # Coverage-first-class (plan invariant 7): some arcs are measured, but an arc
+    # ACTIVE at the target has no reading at all. Treating its silence as a zero
+    # would manufacture a low governance floor from absence -- a false negative --
+    # so the loop reports unscored instead. This is the guard that keeps the two
+    # observed arcs (accountability, assurance) from scoring governance on their
+    # own while preventive/detective/corrective stay interview-only.
+    observed_only = {"accountability": 6, "assurance": 4}  # the scan-readable pair
+    assert governance_score(observed_only, ARCS, 5) is None
+    # Even aiming only at stage 2, preventive is active and unread -> unscored.
+    assert governance_score({"accountability": 6}, ARCS, 2) is None
+
+
+def test_governance_ignores_arcs_that_only_activate_above_the_target():
+    # An arc that activates ABOVE the target does not constrain a domain aiming
+    # lower, so its absence does not block a score. corrective activates at 5;
+    # a domain aiming at 3 with every arc active at 3 reaching 3 closes at 3,
+    # even though corrective was never read.
+    aiming_three = {"preventive": 3, "accountability": 3, "detective": 3,
+                    "assurance": 3}  # corrective unread, irrelevant below stage 5
+    assert governance_score(aiming_three, ARCS, 3) == 3
+
+
 # -- unit: governance binding constraint (the R4 fix) ------------------------
 
 def test_governance_binding_names_the_arc_that_holds_the_loop():
@@ -300,6 +345,82 @@ def test_interview_arc_scores_make_governance_the_binding_constraint():
     assert dom["dimension_scores"].get("governance") == 1
     assert dom["binding_constraints"] == ["governance.preventive"]
     assert dom["confidence"] == "reported"
+
+
+# -- observed governance arcs: the two arcs the scan can read directly --------
+
+def test_observed_governance_arcs_are_scored_from_the_scan():
+    # accountability (share of sources with a named owner) and assurance
+    # (certified share) are the two governance arcs the scan reads directly.
+    # They enter the facet list as OBSERVED governance facets, banded from
+    # rules.yaml exactly like a threshold facet -- no interview required.
+    store, config = _scored_store("median")
+    facets = _facet_scores(score(store, "r", config=config))
+
+    acc = facets["governance.accountability"]
+    assert acc["dimension"] == "governance"
+    assert acc["evidence"] == "observed"
+    assert acc["confidence"] == "observed"
+    # Every median source carries an owner -> ownership coverage 1.0 -> the
+    # top band ("== 1") -> tier 6. This reads the fixture's ground truth; the
+    # bands are not tuned to hit it (build brief 7).
+    assert acc["score"] == 6
+    assert acc["inputs"]["ownership_coverage"] == 1.0
+
+    asr = facets["governance.assurance"]
+    assert asr["dimension"] == "governance"
+    assert asr["evidence"] == "observed"
+    # Certified share sits below the lowest band on this fixture, so the arc
+    # scores its floor (tier 1) -- a real low reading, not an absence.
+    assert asr["score"] == 1
+    assert "certification_coverage" in asr["inputs"]
+
+
+def test_observed_governance_arcs_do_not_score_governance_on_their_own():
+    # The two observed arcs are present, but preventive/detective/corrective are
+    # interview-only and unread on a scan-only run. The completeness gate must
+    # therefore leave governance UNSCORED -- it is absent from the domain's
+    # dimension_scores, never a false floor from the two arcs it could read.
+    store, config = _scored_store("median")
+    dom = score(store, "r", config=config)["domains"][0]
+    assert "governance" not in dom["dimension_scores"]
+    assert dom["dimension_scores"] == {"data": 2, "semantic": 2}
+
+
+def test_observed_governance_arcs_drop_when_datasources_coverage_not_ok():
+    # The observed arcs are coverage-gated on `datasources` (requires_coverage).
+    # If that feed did not measure, an ownership/certification share computed
+    # over an empty or partial table would be a false reading, so the arcs must
+    # drop out entirely rather than score a floor.
+    store, config = _scored_store("median")
+    base = _facet_scores(score(store, "r", config=config))
+    assert "governance.accountability" in base
+    assert "governance.assurance" in base
+
+    # Flip the datasources coverage to a live-path failure and re-score.
+    store.record_coverage("r", "datasources", "failed", "metadata query 501")
+    facets = _facet_scores(score(store, "r", config=config))
+    assert "governance.accountability" not in facets
+    assert "governance.assurance" not in facets
+
+
+def test_interview_supplies_an_arc_the_scan_cannot_observe():
+    # preventive posture is not settleable from a scan, so it stays absent from
+    # the observed arcs and is scored from the interview instead -- marked
+    # reported, like any interview-only facet. This is how the three
+    # non-observable arcs feed the loop.
+    store, config = _scored_store("median")
+    store.save_interview_response(
+        "r", "governance.preventive", 4, "grants reviewed quarterly",
+        "governance_lead", "", "2026-01-01T00:00:00Z", "specialist", "reported")
+    store.commit()
+
+    facets = _facet_scores(score(store, "r", config=config,
+                                 now="2026-01-01T00:00:00Z"))
+    prev = facets["governance.preventive"]
+    assert prev["score"] == 4
+    assert prev["evidence"] == "reported"
+    assert prev["confidence"] == "reported"
 
 
 # -- the four-subcommand CLI shape -------------------------------------------

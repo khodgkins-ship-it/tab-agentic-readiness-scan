@@ -45,9 +45,19 @@ def governance_score(arc_scores, arcs_def, target_stage):
     # type: (Dict[str, int], dict, int) -> Optional[int]
     """Governance scores at the highest stage whose loop closes completely:
     every arc active at that stage reaches the tier the stage demands (tier ==
-    the stage being tested). Returns None when no arc is scored (the prototype
-    case), so governance reports as unscored rather than as a closed loop."""
-    if not arc_scores:
+    the stage being tested).
+
+    Returns None -- governance reports as unscored -- when no arc is scored at
+    all, and also when any arc *active at the target stage* has no reading. That
+    second guard is coverage-first-class (plan invariant 7): an active arc the
+    scan cannot observe and the interview did not supply leaves the loop
+    unassessable, so treating its silence as a zero and manufacturing a low
+    floor would be a false negative. An arc that only activates ABOVE the target
+    is irrelevant to a domain aiming there, so its absence does not block a
+    score."""
+    active_at_target = [a for a, spec in arcs_def.items()
+                        if target_stage >= spec.get("activates_at", 2)]
+    if not arc_scores or any(a not in arc_scores for a in active_at_target):
         return None
     for stage in range(6, 1, -1):
         active = [a for a, spec in arcs_def.items()

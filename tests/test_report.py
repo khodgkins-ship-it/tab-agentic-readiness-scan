@@ -30,7 +30,7 @@ from estate_scan.flags.engine import evaluate_flags
 from estate_scan.report import emit
 from estate_scan.report.compare import compare_runs, render_comparison_markdown
 from estate_scan.report.emit import emit_all
-from estate_scan.report.findings import build_findings
+from estate_scan.report.findings import _definition_multiplicity, build_findings
 from estate_scan.report.markdown import render_markdown
 from estate_scan.report.redact import (SecretLeak, assert_no_secrets, mark_working,
                                         redact)
@@ -230,6 +230,154 @@ def test_definition_multiplicity_sorts_contested_first(tmp_path):
     assert ac["dominant"] is False
 
 
+# -- Finding 1 dominance state machine: singular / contested / dominant ------
+# A group is only a multiplicity finding when it carries >=2 definitions. A
+# single-definition concept is `singular` (nothing to adjudicate), not
+# `contested`, and drops out of the multiplicity and contested tallies. These
+# four states drive every artifact's Dominant column, so they are pinned here
+# with a hand-built store that exercises each in one measured run.
+
+def _variant_row(field_id, name, views, is_dominant, rank,
+                 formula="SUM([Sales])"):
+    return {
+        "field_id": field_id,
+        "field_name": name,
+        "view_count": views,
+        "workbook_count": 1,
+        # distinct definitions -> the group reads as genuinely disagreeing
+        "normalized_hash": "h_%s" % field_id,
+        "is_dominant": is_dominant,
+        "usage_rank": rank,
+        "resolution_status": "resolved",
+        "resolved_formula": formula,
+        "owner": "an owner",
+        "datasource_name": "a source",
+    }
+
+
+class _FakeStore:
+    """The minimal read surface `_definition_multiplicity` touches, so the
+    dominance state machine can be driven directly without the whole pipeline.
+    `groups` is a list of {group_id, label, variants}."""
+
+    def __init__(self, usage_status, groups):
+        self._usage = usage_status
+        self._order = [g["group_id"] for g in groups]
+        self._groups = {g["group_id"]: g for g in groups}
+
+    def coverage_status(self, run_id, measure):
+        return self._usage if measure == "usage_events" else "ok"
+
+    def metric_groups(self, run_id):
+        return [{"group_id": gid,
+                 "canonical_label": self._groups[gid]["label"],
+                 "method": "formula_token", "confidence": "medium"}
+                for gid in self._order]
+
+    def group_variant_detail(self, run_id, gid):
+        return list(self._groups[gid]["variants"])
+
+    def metric_variants(self, run_id, gid):
+        return list(self._groups[gid]["variants"])
+
+    def group_workbook_count(self, run_id, gid):
+        return sum(v["workbook_count"] for v in self._groups[gid]["variants"])
+
+    def variant_execution_detail(self, run_id, gid):
+        return []
+
+
+def _four_state_store(usage_status="ok"):
+    return _FakeStore(usage_status, [
+        # one definition: singular, not a multiplicity finding
+        {"group_id": "grp_solo", "label": "solo_metric",
+         "variants": [_variant_row("f_solo", "Solo", 10, 1, 1)]},
+        # two definitions, none dominant: contested
+        {"group_id": "grp_split", "label": "split_metric",
+         "variants": [_variant_row("f_a", "A", 5, 0, 1),
+                      _variant_row("f_b", "B", 4, 0, 2)]},
+        # two definitions, one dominant: settled
+        {"group_id": "grp_won", "label": "won_metric",
+         "variants": [_variant_row("f_c", "C", 100, 1, 1),
+                      _variant_row("f_d", "D", 1, 0, 2)]},
+    ])
+
+
+def test_single_variant_concept_is_singular_not_contested():
+    dm = _definition_multiplicity(_four_state_store("ok"), "r")
+    assert dm["usage_measured"] is True
+    by_label = {g["label"]: g for g in dm["groups"]}
+
+    solo = by_label["solo_metric"]
+    assert solo["variant_count"] == 1
+    assert solo["multiplicity"] is False
+    assert solo["dominance"] == "singular"
+    # trivially "dominant" in the ranker's sense, but the finding never reports a
+    # one-definition concept as dominant -- it is simply singular.
+    assert solo["dominant"] is False
+
+    assert by_label["split_metric"]["dominance"] == "contested"
+    assert by_label["won_metric"]["dominance"] == "dominant"
+
+    # tallies count only the >=2-definition concepts; the singular one drops out.
+    assert dm["multiplicity_group_count"] == 2
+    assert dm["contested_group_count"] == 1
+
+    # sort: the contested concept (hardest adjudication) leads; singular last.
+    order = [g["label"] for g in dm["groups"]]
+    assert order[0] == "split_metric"
+    assert order[-1] == "solo_metric"
+
+
+def test_singular_concept_renders_as_em_dash_and_no_variant_detail():
+    dm = _definition_multiplicity(_four_state_store("ok"), "r")
+    findings = {
+        "meta": {"build": "working"},
+        "facets": [], "domains": [], "coverage": [],
+        "findings": {"definition_multiplicity": dm,
+                     "security_exposure": {}, "retirement": {}},
+    }
+    md = render_markdown(findings)
+    assert "3 metric concept(s) in scope; 2 defined more than once." in md
+    # measured run: the contested count is asserted, dominance is not "unmeasured"
+    assert "1 of those show no dominant variant (contested)." in md
+    assert "unmeasured" not in md
+    # variant detail is only for the multiply-defined concepts -- the singular
+    # one is not adjudicable, so it gets no detail block.
+    assert "#### split_metric" in md
+    assert "#### won_metric" in md
+    assert "#### solo_metric" not in md
+
+
+def test_definition_multiplicity_unmeasured_usage_is_not_contested():
+    """Plan invariant 7 for Finding 1: dominance is usage-derived, so with
+    usage_events not `ok` a multiply-defined concept is `unmeasured`, never
+    `contested`. Multiplicity itself -- how many concepts carry >=2 definitions
+    -- is structural and stays determinable."""
+    store, _config = _scored_store("median")
+    measured = build_findings(store, "r")["findings"]["definition_multiplicity"]
+    assert measured["usage_measured"] is True
+    baseline_multiplicity = measured["multiplicity_group_count"]
+    assert baseline_multiplicity >= 1
+
+    store.record_coverage("r", "usage_events", "failed", "REST status 501")
+    dm = build_findings(store, "r")["findings"]["definition_multiplicity"]
+    assert dm["usage_measured"] is False
+    # structural multiplicity is unchanged when usage goes unmeasured
+    assert dm["multiplicity_group_count"] == baseline_multiplicity
+    # a contest we cannot see is never asserted
+    assert dm["contested_group_count"] == 0
+    for g in dm["groups"]:
+        if g["multiplicity"]:
+            assert g["dominance"] == "unmeasured"
+            assert g["dominant"] is False
+
+    md = render_markdown(build_findings(store, "r")).lower()
+    assert "not measured this run" in md
+    # the headline must not claim any concept is contested when we could not see
+    assert "(contested)" not in md
+
+
 # -- variants.xlsx -----------------------------------------------------------
 
 def test_variants_xlsx_has_a_sheet_per_group(tmp_path):
@@ -372,6 +520,261 @@ def test_emit_rejects_unknown_framing(tmp_path):
     store, _config = _scored_store("median")
     with pytest.raises(ValueError):
         emit_all(store, "r", str(tmp_path), framing="ladder")
+
+
+# -- coverage honesty: retirement finding degrades when usage unmeasured -----
+
+def test_retirement_measured_on_fixture():
+    # Differential control: on the fixture usage_events is `ok`, so the finding
+    # carries real view figures and the markdown makes the recoverable-capacity
+    # claim. This is what the unmeasured case below must NOT do.
+    store, _config = _scored_store("median")
+    r = build_findings(store, "r")["findings"]["retirement"]
+    assert r["usage_measured"] is True
+    assert r["zero_view_workbooks"] is not None
+    md = render_markdown(build_findings(store, "r")).lower()
+    assert "drew no views" in md
+
+
+def test_retirement_degrades_when_usage_events_not_ok():
+    """Plan invariant 7 on the reporting side: with usage_events not `ok`, the
+    retirement finding must null its view-derived fields and flag itself
+    unmeasured, and the markdown must say the data was not measured rather than
+    claim workbooks "drew no views". The lineage/fanout signal stays real."""
+    store, _config = _scored_store("median")
+    store.record_coverage("r", "usage_events", "failed", "REST status 501")
+
+    findings = build_findings(store, "r")
+    r = findings["findings"]["retirement"]
+    assert r["usage_measured"] is False
+    assert r["zero_view_workbooks"] is None
+    assert r["total_views"] is None
+    assert r["workbooks_covering_80pct_views"] is None
+    assert r["unused_workbook_sample"] == []
+    # The always-real lineage signal is still present.
+    assert r["workbooks_total"] is not None
+    assert "redundant_source_tables" in r
+
+    md = render_markdown(findings).lower()
+    assert "not measured" in md
+    assert "drew no views" not in md
+    # Consolidation (from lineage) is still reported.
+    assert "candidate consolidation" in md
+
+
+# -- Finding 4: governance posture (observed presence evidence, non-gating) ---
+# The third governance-signal category (build plan R4). The scored arcs
+# (accountability, assurance) gate the maturity loop from ownership/certification
+# coverage; this block does NOT gate -- it proves a detective mechanism is in
+# place and exercised and hands the interview concrete good/bad examples. Coverage
+# is first-class: an unmeasured feed reads `unmeasured`, never `not_exercised`.
+
+def _detective(findings):
+    arcs = findings["findings"]["governance_posture"]["arcs"]
+    return next(a for a in arcs if a["arc"] == "detective")
+
+
+def test_governance_posture_presence_evidence_assembled():
+    store, _config = _scored_store("median")
+    findings = build_findings(store, "r")
+    det = _detective(findings)
+    # The arc is assessed by the interview, not scored from these signals.
+    assert det["scored_by"] == "interview"
+    mech = {m["mechanism"]: m for m in det["mechanisms"]}
+    # Both detective mechanisms are measured and exercised on the fixture.
+    assert mech["certification"]["status"] == "in_use"
+    assert mech["certification"]["certified_sources"] == 46
+    assert mech["certification"]["published_sources"] == 200
+    assert mech["data_quality_warnings"]["status"] == "in_use"
+    assert mech["data_quality_warnings"]["warnings_total"] > 0
+    # Divergence set = distinct certified sources carrying an active warning
+    # (the GOV-03 set), with clean certified sources as the good examples.
+    dv = det["divergence"]
+    assert dv["measured"] is True
+    assert dv["count"] == len(dv["bad_examples"]) == 5
+    assert dv["good_examples"], "certified-clean sources are the good examples"
+    gov03 = {r["name"] for r in store.certified_sources_with_active_warning("r")}
+    assert {e["datasource_name"] for e in dv["bad_examples"]} == gov03
+
+
+def test_governance_posture_marks_unmeasured_feed_honestly():
+    """Coverage first-class on the evidence side: with the DQW feed not `ok`, the
+    data-quality mechanism reads `unmeasured` (never `not_exercised`) and the
+    divergence is not asserted, while the still-measured certification mechanism
+    is untouched. Absence of measurement is not absence of the mechanism."""
+    store, _config = _scored_store("median")
+    store.record_coverage("r", "data_quality_warnings", "failed", "GraphQL 500")
+    findings = build_findings(store, "r")
+    det = _detective(findings)
+    mech = {m["mechanism"]: m for m in det["mechanisms"]}
+    dqw = mech["data_quality_warnings"]
+    assert dqw["measured"] is False
+    assert dqw["status"] == "unmeasured"
+    assert dqw["warnings_total"] is None and dqw["warnings_active"] is None
+    # Divergence needs both feeds; unmeasured is reported honestly, not as zero.
+    dv = det["divergence"]
+    assert dv["measured"] is False
+    assert dv["count"] is None
+    assert dv["bad_examples"] == [] and dv["good_examples"] == []
+    # The still-measured certification mechanism is unaffected.
+    assert mech["certification"]["status"] == "in_use"
+    # And the markdown says so rather than implying agreement.
+    md = render_markdown(findings).lower()
+    assert "divergence not measured this run" in md
+
+
+def test_governance_posture_does_not_score_the_detective_arc():
+    """Observed presence is evidence, not a score: it mints no scored
+    governance.detective facet and does not move the maturity register. The
+    detective arc stays the interview's to set, and the no-composite contract
+    holds with the block present."""
+    store, _config = _scored_store("median")
+    findings = build_findings(store, "r")
+    facet_ids = {f["id"] for f in findings["facets"]}
+    assert "governance.detective" not in facet_ids
+    assert _detective(findings)["scored_by"] == "interview"
+    assert set(findings.keys()) == _FINDINGS_KEYS
+
+
+def test_governance_posture_survives_redaction_without_owner_names():
+    """Source names and counts only -- no owner names -- so the block passes
+    through both redaction builds untouched and leaks nothing into the
+    presentation build or the pre-emit secret scan."""
+    store, _config = _scored_store("median")
+    findings = build_findings(store, "r")
+    gp = findings["findings"]["governance_posture"]
+    # redact() mutates only definition_multiplicity/security_exposure; the
+    # governance block is deep-equal in the presentation copy.
+    assert redact(findings)["findings"]["governance_posture"] == gp
+    # No owner key anywhere in the block (belt-and-braces on the no-owner rule).
+    assert "owner" not in json.dumps(gp)
+    # It survives the pre-emit secret scan in both builds.
+    assert_no_secrets(redact(findings), "presentation")
+    assert_no_secrets(mark_working(findings), "working")
+
+
+def test_governance_posture_in_payload_and_markdown():
+    store, _config = _scored_store("median")
+    findings = build_findings(store, "r")
+    payload = webapp_payload(findings)
+    # Carried in the strict-subset payload, same top-level shape, no owner key.
+    gp = payload["findings"]["governance_posture"]
+    det = next(a for a in gp["arcs"] if a["arc"] == "detective")
+    assert det["scored_by"] == "interview"
+    assert "owner" not in json.dumps(gp)
+    assert set(payload.keys()) == _FINDINGS_KEYS
+    # Markdown renders it as observed-but-interview-assessed evidence with
+    # concrete good/bad examples.
+    md = render_markdown(findings).lower()
+    assert "governance posture" in md
+    assert "assessed by the interview" in md
+    assert "certified but warned" in md
+
+
+# The preventive arc is the second observed-presence arc (build plan R4): the
+# same non-gating pattern over the permissions feed. It proves the access model
+# is exercised (grants recorded, explicit Deny in use) and hands the interview
+# broad-and-powerful vs scoped grants as examples. SEC-02 the flag scores
+# permissive-grant firing separately; this block never gates. Coverage stays
+# first-class; good examples are group grantees only, so no user name can leak.
+
+def _preventive(findings):
+    arcs = findings["findings"]["governance_posture"]["arcs"]
+    return next(a for a in arcs if a["arc"] == "preventive")
+
+
+def test_governance_posture_preventive_arc_assembled():
+    store, _config = _scored_store("median")
+    findings = build_findings(store, "r")
+    arcs = findings["findings"]["governance_posture"]["arcs"]
+    # Ordered as the governance loop activates: preventive before detective.
+    assert [a["arc"] for a in arcs] == ["preventive", "detective"]
+    prev = _preventive(findings)
+    assert prev["scored_by"] == "interview"
+    mech = {m["mechanism"]: m for m in prev["mechanisms"]}
+    total, objects, deny = store.permission_grant_counts("r")
+    assert mech["permission_grants"]["status"] == "in_use"
+    assert mech["permission_grants"]["grants_total"] == total
+    assert mech["permission_grants"]["objects_covered"] == objects
+    assert mech["explicit_deny"]["status"] == "in_use"
+    assert mech["explicit_deny"]["deny_rules"] == deny
+    # Shipped rules: AllUsers holds only [Read], so there is no permissive grant
+    # (count 0) -- good posture. Analysts (a NAMED group) holds Write, so the
+    # scoped grant is the good example. Fixture is NOT shaped to make it fire.
+    ex = prev["exposure"]
+    assert ex["measured"] is True
+    assert ex["count"] == 0 and ex["bad_examples"] == []
+    assert ex["good_examples"], "scoped sensitive grants are the good examples"
+    assert all(e["grantee"] == "Analysts" for e in ex["good_examples"])
+
+
+def test_governance_posture_preventive_exposure_reports_a_permissive_grant():
+    """The bad path, proven without shaping the fixture: inject one permissive
+    grant (AllUsers may Delete) and a user-scoped sensitive grant. The exposure
+    block reports the broad grant, and the user grant never appears -- good
+    examples are group grantees only, so no user name leaks."""
+    store, _config = _scored_store("median")
+    store.load_permissions("r", [
+        {"object_type": "workbook", "object_id": "wb_open",
+         "grantee_type": "group", "grantee_id": "AllUsers",
+         "capability": "Delete", "mode": "Allow", "sampled": 0},
+        {"object_type": "workbook", "object_id": "wb_user",
+         "grantee_type": "user", "grantee_id": "jsmith",
+         "capability": "Write", "mode": "Allow", "sampled": 1}])
+    findings = build_findings(store, "r")
+    ex = _preventive(findings)["exposure"]
+    assert ex["count"] == 1
+    bad = ex["bad_examples"]
+    assert len(bad) == 1
+    assert bad[0]["grantee"] == "AllUsers" and bad[0]["capability"] == "Delete"
+    assert bad[0]["object_type"] == "workbook"
+    # The user-scoped grant is excluded from good examples (group grantees only)
+    # and its username appears nowhere in the block.
+    gp = findings["findings"]["governance_posture"]
+    assert all(e["grantee"] != "jsmith" for e in ex["good_examples"])
+    assert "jsmith" not in json.dumps(gp)
+    md = render_markdown(findings).lower()
+    assert "broad and powerful" in md
+
+
+def test_governance_posture_preventive_marks_unmeasured_feed_honestly():
+    """Coverage first-class on the preventive side: with the permissions feed not
+    `ok`, both mechanisms read `unmeasured` (never `not_exercised`) and no
+    exposure is asserted. Absence of measurement is not a clean bill."""
+    store, _config = _scored_store("median")
+    store.record_coverage("r", "permissions", "failed", "REST 403")
+    findings = build_findings(store, "r")
+    prev = _preventive(findings)
+    mech = {m["mechanism"]: m for m in prev["mechanisms"]}
+    assert mech["permission_grants"]["measured"] is False
+    assert mech["permission_grants"]["status"] == "unmeasured"
+    assert mech["permission_grants"]["grants_total"] is None
+    assert mech["explicit_deny"]["status"] == "unmeasured"
+    assert mech["explicit_deny"]["deny_rules"] is None
+    ex = prev["exposure"]
+    assert ex["measured"] is False and ex["count"] is None
+    assert ex["bad_examples"] == [] and ex["good_examples"] == []
+    md = render_markdown(findings).lower()
+    assert "permission exposure not measured this run" in md
+
+
+def test_governance_posture_preventive_does_not_score_and_lands_in_payload():
+    """Observed presence, not a score: it mints no scored governance.preventive
+    facet, the arc stays the interview's to set, the no-composite contract holds,
+    and the projected payload carries the exposure block with no owner name."""
+    store, _config = _scored_store("median")
+    findings = build_findings(store, "r")
+    facet_ids = {f["id"] for f in findings["facets"]}
+    assert "governance.preventive" not in facet_ids
+    assert _preventive(findings)["scored_by"] == "interview"
+    assert set(findings.keys()) == _FINDINGS_KEYS
+    payload = webapp_payload(findings)
+    prev = next(a for a in payload["findings"]["governance_posture"]["arcs"]
+                if a["arc"] == "preventive")
+    assert prev["exposure"]["measured"] is True
+    assert "divergence" not in prev  # only the arc's own contrast block
+    assert "owner" not in json.dumps(payload["findings"]["governance_posture"])
+    assert set(payload.keys()) == _FINDINGS_KEYS
 
 
 # -- R5: multi-run comparison ------------------------------------------------

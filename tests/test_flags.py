@@ -108,6 +108,17 @@ def test_prototype_flags_match_manifest():
     assert rows["DF-05"][0]["count"] == expected["DF-05"]["count"]
     assert rows["DF-06"][0]["count"] == expected["DF-06"]["count"]
 
+    # GOV-03: certified sources carrying an active data-quality warning -- the
+    # divergence case injected in the fixture. Count matches ground truth and the
+    # evidence lists the divergent sources.
+    assert rows["GOV-03"][0]["count"] == expected["GOV-03"]["count"]
+    assert rows["GOV-03"][1]["count"] == expected["GOV-03"]["count"]
+    assert len(rows["GOV-03"][1]["sources"]) == expected["GOV-03"]["count"]
+
+    # GOV-02: the estate has warnings, so "the feature is unused" is silent -- a
+    # measured feed with signal is not a clean one it invents.
+    assert "GOV-02" not in rows
+
 
 def test_catalog_is_complete_and_unimplemented_flags_are_defined_not_evaluated():
     # The file is the complete catalog from day one: flags marked
@@ -197,6 +208,39 @@ def test_sec02_fires_when_everyone_grantee_list_widens(tmp_path):
     fired = {f["flag"] for f in after["fired"]}
     assert "SEC-02" in fired
     assert "SEC-02" in _by_flag(store)
+
+
+def test_gov02_fires_only_on_a_measured_feed_with_zero_warnings():
+    """GOV-02 is the coverage-honesty flag: "no data-quality warnings" is a real
+    signal only when the DQW feed was actually measured. No shipped fixture is
+    shaped to fire it (every estate carries warnings), so the firing path and its
+    coverage gate are proven here by driving the store directly -- not by editing
+    a fixture (build brief 7)."""
+    store = _store("median")
+
+    # As shipped: the median estate carries warnings, so GOV-02 is silent.
+    base = evaluate_flags(store, "r", now="2026-01-01T00:00:00Z")
+    assert "GOV-02" not in {f["flag"] for f in base["fired"]}
+
+    # Remove every warning while the feed stays measured (coverage `ok`): now the
+    # estate genuinely uses no data-quality warnings, so GOV-02 fires.
+    store.conn.execute("DELETE FROM data_quality_warnings WHERE run_id='r'")
+    store.conn.commit()
+    assert store.coverage_status("r", "data_quality_warnings") == "ok"
+    fired = evaluate_flags(store, "r", now="2026-01-01T00:00:00Z")
+    assert "GOV-02" in {f["flag"] for f in fired["fired"]}
+    _, ev = _by_flag(store)["GOV-02"]
+    assert ev["warning_count"] == 0 and ev["measured"] is True
+    # GOV-03 has no divergence to find once the warnings are gone.
+    assert "GOV-03" not in _by_flag(store)
+
+    # Now mark the feed unmeasured (the live case where the DQW API is off): zero
+    # warnings must NOT read as health -- GOV-02 goes silent again.
+    store.record_coverage("r", "data_quality_warnings", "unavailable",
+                          "data quality API not enabled on this site")
+    after = evaluate_flags(store, "r", now="2026-01-01T00:00:00Z")
+    assert "GOV-02" not in {f["flag"] for f in after["fired"]}
+    assert "GOV-02" not in _by_flag(store)
 
 
 def test_df07_grain_flag_is_suppressed_but_evaluated():

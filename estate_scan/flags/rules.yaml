@@ -179,6 +179,25 @@ flags:
     implemented: true
     suppress: true   # noisy on large estates (build spec section 8)
 
+  DF-08:
+    severity: warning
+    confidence: derived
+    facet: data.provenance
+    feeds: retirement_case
+    # Root-table column divergence: >=2 published sources on the SAME physical
+    # table modelling its columns inconsistently -- column-level sprawl the
+    # table-level fan-out (DF-02) cannot see, and a consolidation signal. Fires
+    # on TYPE divergence (a shared column given different Tableau field types by
+    # different sources); mere subset projection is intended narrowing and does
+    # NOT fire. `flag_name_divergence` (default off) would also count sources
+    # exposing different column SETS -- left off because partial overlap on wide
+    # fact tables is normal and would over-fire. Threshold PROVISIONAL, not
+    # tuned against fixtures (build spec section 7).
+    rule: root_table_column_divergence
+    threshold: {min_count: 1, flag_name_divergence: false}
+    scope: estate
+    implemented: true
+
   # -- governance ---------------------------------------------------------
   GOV-01:
     severity: warning
@@ -198,10 +217,13 @@ flags:
     rule: no_data_quality_warnings
     threshold: {}
     scope: estate
-    # Deferred honestly: the data-quality-warning (DQW) feed is not extracted
-    # yet, so there is no signal to read. Left unimplemented rather than reading
-    # a missing feed as "no warnings" -- absence of extraction is not health.
-    implemented: false
+    # The DQW feed is now extracted, so this reads a real signal: zero
+    # data-quality warnings across the estate means the platform's own
+    # integrity-signalling mechanism is going unused. Fires ONLY when the feed
+    # was measured (coverage `ok`) -- an unextracted or failed feed reading as
+    # "no warnings" would be absence of measurement, not health, so it never
+    # fires on an unmeasured feed (coverage is first-class).
+    implemented: true
 
   # REST<->Metadata description divergence (05 section 5). Needs the REST
   # field-description read alongside the Metadata one to compare the two; the
@@ -216,17 +238,20 @@ flags:
     scope: estate
     implemented: false
 
-  # Certification / DQW divergence (05 section 5). Needs the DQW feed to
-  # cross-check against certification; DQW is not extracted yet.
+  # Certification / DQW divergence (05 section 5): a certified source that still
+  # carries an ACTIVE data-quality warning -- the trust signal diverges from the
+  # health signal. The DQW feed is now extracted, so the cross-check is real.
+  # `require_elevated` (default off) can narrow firing to modern-severity
+  # warnings only, from the rules file with no code edit.
   GOV-03:
     severity: warning
     confidence: observed
     facet: governance.detective
     feeds: null
     rule: certification_dqw_divergence
-    threshold: {}
+    threshold: {min_count: 1, require_elevated: false}
     scope: estate
-    implemented: false
+    implemented: true
 
   # -- adoption / lifecycle ----------------------------------------------
   EST-01:
@@ -356,6 +381,7 @@ facets:
     evidence: observed
     scored: true
     measure: content_activation        # share of workbooks with any measured views
+    requires_coverage: [usage_events]   # invariant 7: unmeasured usage is not low reach
     bands:
       2: "< 0.4"
       3: "0.4 - 0.7"
@@ -430,9 +456,35 @@ facets:
 # governance reports as unscored. The closure machinery is built and unit-tested
 # (tests/test_score.py) so it is ready when interview capture supplies arc
 # scores.
+#
+# Two arcs carry an OBSERVED reading from the scan: accountability from the
+# share of sources with a named owner, assurance from the certified share --
+# both recorded facts, not judgment calls. They are banded here exactly like a
+# threshold facet (score/facets.py) and coverage-gated on `datasources`, so an
+# unmeasured feed yields no reading rather than a false score, and they
+# reconcile with the interview by the same scan-wins rule the facets use.
+#
+# The other three stay interview-derived: preventive posture (are permissions
+# appropriately restrictive -- the SEC-02 judgment, deferred) and corrective
+# behaviour (do agents remediate detected problems) are not settleable from a
+# scan, and detective posture needs a monitoring-coverage measure the estate
+# does not expose yet. They are supplied by governance.<arc> interview
+# responses; until then those arcs are unread, and an active arc left unread
+# makes the loop report unscored rather than manufacturing a floor.
+#
+# Bands are PROVISIONAL and NOT tuned against the fixtures (build brief 7): a
+# coverage ladder in round steps, to be calibrated from live engagements (R6).
 governance_arcs:
   preventive:     {activates_at: 2}
   detective:      {activates_at: 3}
-  assurance:      {activates_at: 3}
   corrective:     {activates_at: 5}
-  accountability: {activates_at: 2}
+  accountability:
+    activates_at: 2
+    measure: ownership_coverage         # share of sources with a named owner
+    bands: {2: "> 0.3", 3: "> 0.6", 4: "> 0.8", 5: "> 0.95", 6: "== 1"}
+    requires_coverage: [datasources]
+  assurance:
+    activates_at: 3
+    measure: certification_coverage      # certified share of sources
+    bands: {2: "> 0.3", 3: "> 0.6", 4: "> 0.8", 5: "> 0.95", 6: "== 1"}
+    requires_coverage: [datasources]

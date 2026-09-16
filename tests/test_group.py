@@ -15,7 +15,7 @@ import os
 import pytest
 
 from estate_scan.clients.fixture import FixtureClient
-from estate_scan.derive.group import assign_groups
+from estate_scan.derive.group import _is_candidate, assign_groups
 from estate_scan.derive.rank import cover80_for, rank_groups
 from estate_scan.derive.resolve import resolve_all
 from estate_scan.extract.runner import ExtractRunner
@@ -142,6 +142,32 @@ def test_user_context_fields_are_not_grouped():
             grouped_names.add(names[m["field_id"]])
     assert "Member Sales" not in grouped_names
     assert group_summary["excluded_fields"] >= 20
+
+
+# -- a grouping candidate must aggregate a base column, not a literal --------
+
+def test_constant_only_aggregate_is_not_a_grouping_candidate():
+    # MAX(0.48), AVG(75): an aggregation wrapping only a literal is a
+    # goal/threshold constant, not a business metric. Without a base-column
+    # requirement it would seed a one-variant "concept" that reads as a metric
+    # with a single definition -- noise, not a finding. It must not be a
+    # candidate.
+    assert not _is_candidate({"formula": "MAX(0.48)",
+                              "resolved_formula": "MAX(0.48)"})
+    assert not _is_candidate({"formula": "AVG(75)",
+                              "resolved_formula": "AVG(75)"})
+    # A real measure aggregates at least one base column -- still a candidate.
+    assert _is_candidate({"formula": "SUM([Sales])",
+                          "resolved_formula": "SUM([Sales])"})
+    # A ratio over columns too (this is the gross-margin shape).
+    assert _is_candidate({"formula": "SUM([Profit])/SUM([Sales])",
+                          "resolved_formula": "SUM([Profit])/SUM([Sales])"})
+    # A non-aggregating constant is not a candidate either (no agg function).
+    assert not _is_candidate({"formula": "0.48", "resolved_formula": "0.48"})
+    # Entitlement fields stay excluded regardless of columns (unchanged).
+    assert not _is_candidate({
+        "formula": "IF ISMEMBEROF('Sales') THEN SUM([Sales]) END",
+        "resolved_formula": "IF ISMEMBEROF('Sales') THEN SUM([Sales]) END"})
 
 
 # -- instrumentation the build brief asks be emitted -------------------------

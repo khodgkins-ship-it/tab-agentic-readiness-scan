@@ -18,6 +18,7 @@ Example config (YAML)::
     domains: []
     timeout_seconds: 60
     session_refresh_seconds: 3000
+    permissions_sample: 50                   # content objects sampled per type
 """
 
 import json
@@ -84,4 +85,11 @@ def validate_config(config):
     if not isinstance(scu, str):
         raise ConfigError("config 'site_content_url' must be a string "
                           "(\"\" for the default site)")
+    if "permissions_sample" in config:
+        ps = config["permissions_sample"]
+        # bool is an int subclass -- reject it explicitly so `true`/`false`
+        # cannot masquerade as a sample size.
+        if isinstance(ps, bool) or not isinstance(ps, int) or ps < 0:
+            raise ConfigError("config 'permissions_sample' must be a non-negative "
+                              "integer (content objects sampled per type)")
     return config

@@ -17,6 +17,17 @@
     "with_group_by": 1,
     "with_user_function": 0
   },
+  "data_quality_warnings": {
+    "active": 1,
+    "count": 1,
+    "severe": 1
+  },
+  "database_tables": {
+    "certified": 1,
+    "count": 2,
+    "embedded": 1,
+    "max_downstream": 1
+  },
   "depth_histogram": {
     "-1": 2,
     "1": 5,
@@ -66,11 +77,23 @@
       "count": 0,
       "fires": false
     },
+    "DF-08": {
+      "count": 0,
+      "fires": false
+    },
     "EST-01": {
       "count": 0,
       "fires": false
     },
     "GOV-01": {
+      "count": 0,
+      "fires": false
+    },
+    "GOV-02": {
+      "count": 1,
+      "fires": false
+    },
+    "GOV-03": {
       "count": 0,
       "fires": false
     },
@@ -121,6 +144,11 @@
   },
   "sec01_expected": false,
   "seed": 1301,
+  "table_column_projection": {
+    "rows": 44,
+    "shared_tables": 0,
+    "type_divergent_columns": 0
+  },
   "tool_version": "0.1.0",
   "user_context_fields": 0,
   "view_concentration": {

@@ -1,0 +1,26 @@
+# Query: database_tables
+# Physical-table grain (DF-07 companion to custom_sql). A DatabaseTable is a
+# physical table an upstream connection exposes. Its column count is a grain
+# width signal; its downstream-datasource fan-out is the consolidation signal
+# from the physical side (the mirror of DF-02's per-table fan-out). isEmbedded
+# and isCertified feed governance. Read-only: a plain paginated connection with
+# no filter, so it runs unconditionally as a global shard and degrades to
+# `unavailable` only if the site schema rejects the field.
+query database_tables($first: Int!, $after: String) {
+  databaseTablesConnection(first: $first, after: $after) {
+    nodes {
+      id
+      luid
+      name
+      fullName
+      schema
+      connectionType
+      isEmbedded
+      isCertified
+      columnsConnection { totalCount }
+      downstreamDatasourcesConnection { totalCount }
+    }
+    pageInfo { hasNextPage endCursor }
+    totalCount
+  }
+}

@@ -7,7 +7,7 @@
   "deployment_type": "cloud",
   "adoption_source": "fixture",
   "site": {
-   "luid": "a6d24634-0000-4000-8000-00000000000b",
+   "luid": "99c32499-0000-4000-8000-00000000000b",
    "name": "hostile-site"
   },
   "core_metrics": [],
@@ -23,7 +23,7 @@
  "datasources": [
   {
    "id": "ds_0001",
-   "luid": "6fb56e59-0000-4000-8000-000000000001",
+   "luid": "598c9f62-0000-4000-8000-000000000001",
    "name": "Edge DS 1",
    "projectName": "Hostile",
    "isCertified": false,
@@ -35,7 +35,7 @@
    "hasExtracts": false,
    "upstreamTables": [
     {
-     "id": "71f5f07b-0000-4000-8000-000000000002",
+     "id": "67fa594d-0000-4000-8000-000000000002",
      "name": "t_edge_ds_1",
      "schema": "public",
      "fullName": "warehouse.public.t_190"
@@ -58,7 +58,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Sales",
+       "remoteType": "R8",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -75,7 +87,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Amount",
+       "remoteType": "R8",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -92,7 +116,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Cost",
+       "remoteType": "R8",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -109,7 +145,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Quantity",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -126,7 +174,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Customer ID",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -143,7 +203,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Order ID",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -160,7 +232,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Refunds",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -177,7 +261,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "FX Rate",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -194,7 +290,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Adjustments",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -211,7 +319,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Discount",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -228,7 +348,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Last Order Date",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -245,7 +377,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Active",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -262,7 +406,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Status",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -279,7 +435,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Orders",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -296,7 +464,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Revenue",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -313,7 +493,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Churned",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -330,7 +522,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Last Login",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -347,7 +551,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Churned Customers",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -364,7 +580,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Region",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -381,7 +609,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Email",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -398,7 +638,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Region Owner",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -415,7 +667,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Shipping",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000002",
+        "name": "t_edge_ds_1",
+        "luid": null,
+        "fullName": "warehouse.public.t_190"
+       }
+      }
+     ]
     },
     {
      "__typename": "CalculatedField",
@@ -852,7 +1116,7 @@
   },
   {
    "id": "ds_0002",
-   "luid": "6fb56e59-0000-4000-8000-000000000003",
+   "luid": "598c9f62-0000-4000-8000-000000000003",
    "name": "Edge DS 2",
    "projectName": "Hostile",
    "isCertified": false,
@@ -864,7 +1128,7 @@
    "hasExtracts": true,
    "upstreamTables": [
     {
-     "id": "71f5f07b-0000-4000-8000-000000000004",
+     "id": "67fa594d-0000-4000-8000-000000000004",
      "name": "t_edge_ds_2",
      "schema": "public",
      "fullName": "warehouse.public.t_7"
@@ -887,7 +1151,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Sales",
+       "remoteType": "R8",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -904,7 +1180,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Amount",
+       "remoteType": "R8",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -921,7 +1209,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Cost",
+       "remoteType": "R8",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -938,7 +1238,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Quantity",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -955,7 +1267,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Customer ID",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -972,7 +1296,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Order ID",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -989,7 +1325,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Refunds",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -1006,7 +1354,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "FX Rate",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -1023,7 +1383,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Adjustments",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -1040,7 +1412,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Discount",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -1057,7 +1441,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Last Order Date",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -1074,7 +1470,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Active",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -1091,7 +1499,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Status",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -1108,7 +1528,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Orders",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -1125,7 +1557,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Revenue",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -1142,7 +1586,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Churned",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -1159,7 +1615,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Last Login",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -1176,7 +1644,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Churned Customers",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -1193,7 +1673,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Region",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -1210,7 +1702,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Email",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -1227,7 +1731,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Region Owner",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "ColumnField",
@@ -1244,7 +1760,19 @@
      "_definition_id": null,
      "_ref_field_ids": [],
      "_view_count": 0,
-     "_used_in_workbooks": []
+     "_used_in_workbooks": [],
+     "upstreamColumns": [
+      {
+       "name": "Shipping",
+       "remoteType": "WSTR",
+       "table": {
+        "id": "67fa594d-0000-4000-8000-000000000004",
+        "name": "t_edge_ds_2",
+        "luid": null,
+        "fullName": "warehouse.public.t_7"
+       }
+      }
+     ]
     },
     {
      "__typename": "CalculatedField",
@@ -1289,7 +1817,7 @@
  "workbooks": [
   {
    "id": "wb_0001",
-   "luid": "06bc6a46-0000-4000-8000-000000000005",
+   "luid": "52c1a81d-0000-4000-8000-000000000005",
    "name": "Hostile WB 0",
    "projectName": "Hostile",
    "createdAt": "2025-01-01T00:00:00Z",
@@ -1301,27 +1829,27 @@
    "upstreamDatasources": [
     {
      "id": "ds_0001",
-     "luid": "6fb56e59-0000-4000-8000-000000000001",
+     "luid": "598c9f62-0000-4000-8000-000000000001",
      "name": "Edge DS 1"
     }
    ],
    "embeddedDatasources": [],
    "sheets": [
     {
-     "id": "bc8e86af-0000-4000-8000-000000000006",
+     "id": "d2459754-0000-4000-8000-000000000006",
      "name": "Hostile WB 0 Sheet"
     }
    ],
    "dashboards": [
     {
-     "id": "f2ea32ee-0000-4000-8000-000000000007",
+     "id": "d9e9261b-0000-4000-8000-000000000007",
      "name": "Hostile WB 0 Dashboard"
     }
    ]
   },
   {
    "id": "wb_0002",
-   "luid": "06bc6a46-0000-4000-8000-000000000008",
+   "luid": "52c1a81d-0000-4000-8000-000000000008",
    "name": "Hostile WB 1",
    "projectName": "Hostile",
    "createdAt": "2025-01-01T00:00:00Z",
@@ -1333,20 +1861,20 @@
    "upstreamDatasources": [
     {
      "id": "ds_0002",
-     "luid": "6fb56e59-0000-4000-8000-000000000003",
+     "luid": "598c9f62-0000-4000-8000-000000000003",
      "name": "Edge DS 2"
     }
    ],
    "embeddedDatasources": [],
    "sheets": [
     {
-     "id": "bc8e86af-0000-4000-8000-000000000009",
+     "id": "d2459754-0000-4000-8000-000000000009",
      "name": "Hostile WB 1 Sheet"
     }
    ],
    "dashboards": [
     {
-     "id": "f2ea32ee-0000-4000-8000-00000000000a",
+     "id": "d9e9261b-0000-4000-8000-00000000000a",
      "name": "Hostile WB 1 Dashboard"
     }
    ]
@@ -1355,7 +1883,7 @@
  "usage_events": [
   {
    "workbook_id": "wb_0001",
-   "workbook_luid": "06bc6a46-0000-4000-8000-000000000005",
+   "workbook_luid": "52c1a81d-0000-4000-8000-000000000005",
    "views": 3,
    "last_viewed_days_ago": 80,
    "user_id": "user34",
@@ -1363,7 +1891,7 @@
   },
   {
    "workbook_id": "wb_0002",
-   "workbook_luid": "06bc6a46-0000-4000-8000-000000000008",
+   "workbook_luid": "52c1a81d-0000-4000-8000-000000000008",
    "views": 15,
    "last_viewed_days_ago": 11,
    "user_id": "user1",
@@ -1390,7 +1918,7 @@
    "downstreamDatasources": [
     {
      "id": "ds_0001",
-     "luid": "6fb56e59-0000-4000-8000-000000000001",
+     "luid": "598c9f62-0000-4000-8000-000000000001",
      "name": "Edge DS 1"
     }
    ]
@@ -1402,7 +1930,7 @@
    "downstreamDatasources": [
     {
      "id": "ds_0002",
-     "luid": "6fb56e59-0000-4000-8000-000000000003",
+     "luid": "598c9f62-0000-4000-8000-000000000003",
      "name": "Edge DS 2"
     }
    ]
@@ -1444,6 +1972,49 @@
    "capability": "Delete",
    "mode": "Allow",
    "sampled": 1
+  }
+ ],
+ "database_tables": [
+  {
+   "id": "67fa594d-0000-4000-8000-000000000002",
+   "luid": "67fa594d-0000-4000-8000-000000000002",
+   "name": "t_edge_ds_1",
+   "fullName": "warehouse.public.t_190",
+   "schema": "public",
+   "connectionType": "snowflake",
+   "isEmbedded": true,
+   "isCertified": true,
+   "columnCount": 8,
+   "downstreamDatasourceCount": 1
+  },
+  {
+   "id": "67fa594d-0000-4000-8000-000000000004",
+   "luid": "67fa594d-0000-4000-8000-000000000004",
+   "name": "t_edge_ds_2",
+   "fullName": "warehouse.public.t_7",
+   "schema": "public",
+   "connectionType": "redshift",
+   "isEmbedded": false,
+   "isCertified": false,
+   "columnCount": 15,
+   "downstreamDatasourceCount": 1
+  }
+ ],
+ "data_quality_warnings": [
+  {
+   "id": "dqw_0001",
+   "luid": "dqwlu_0001",
+   "isActive": true,
+   "isSevere": true,
+   "isElevated": true,
+   "warningType": "STALE",
+   "category": "DATA_QUALITY_WARNING",
+   "message": "Automated data-quality check flagged this source.",
+   "asset": {
+    "luid": "598c9f62-0000-4000-8000-000000000001",
+    "name": "Edge DS 1",
+    "__typename": "PublishedDatasource"
+   }
   }
  ]
 }

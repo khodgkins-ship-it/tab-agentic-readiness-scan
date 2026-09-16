@@ -246,6 +246,84 @@ def test_usage_events_fails_on_live_but_succeeds_on_fixture():
     assert lv_cov["usage_events"] == "failed"
 
 
+# -- permissions round-trip through the per-object sampler -------------------
+
+def _permission_rows(store, run_id):
+    rows = store.conn.execute(
+        "SELECT object_type, object_id, grantee_type, grantee_id, capability, "
+        "mode, sampled FROM permissions WHERE run_id=?", (run_id,)).fetchall()
+    return sorted(tuple(r) for r in rows)
+
+
+@pytest.mark.parametrize("profile", PROFILES)
+def test_live_permissions_round_trip_matches_fixture(profile):
+    # The live path has no bulk permissions endpoint: it lists objects and reads
+    # each object's grants through the GET-only per-object permission specs, then
+    # flattens the nested granteeCapabilities back to flat grant rows. With the
+    # default sample it must reconstruct exactly the fixture's permission set --
+    # project-level in full, content-level over the (prefix) sample the fixture
+    # itself granted on.
+    estate = _estate(profile)
+    fx = _run_fixture(estate)
+    lv, _, _ = _run_live(estate)
+    assert _permission_rows(lv, "rl") == _permission_rows(fx, "rf")
+
+
+def test_live_permissions_coverage_records_sampling_basis():
+    estate = _estate("median")
+    lv, _, _ = _run_live(estate)
+    cov = {r["measure"]: (r["status"], r["reason"]) for r in lv.coverage("rl")}
+    status, reason = cov["permissions"]
+    assert status == "ok"                      # a live site can now score SEC-02
+    # Project-level taken in full, content-level sampled: the basis is a first-
+    # class recorded fact, not an implicit assumption.
+    assert "projects (all)" in reason
+    assert "workbooks (sampled)" in reason
+
+
+def test_live_permissions_project_level_complete_content_sampled():
+    estate = _estate("median")
+    lv, _, _ = _run_live(estate)
+    project_all = lv.conn.execute(
+        "SELECT COUNT(*) c FROM permissions WHERE run_id='rl' "
+        "AND object_type='project' AND sampled=0").fetchone()["c"]
+    content_sampled = lv.conn.execute(
+        "SELECT COUNT(*) c FROM permissions WHERE run_id='rl' AND sampled=1"
+    ).fetchone()["c"]
+    # Every project grant is marked complete (sampled=0); content grants are
+    # marked sampled (sampled=1) -- the distinction governance scoring keys off.
+    assert project_all > 0 and content_sampled > 0
+    projects = lv.count("projects", "rl")
+    assert project_all == projects * 3         # AllUsers[Read] + Analysts[Read,Write]
+
+
+def test_live_permissions_fail_honestly_when_projects_unlistable():
+    # If the project list itself cannot be read, the permissions picture is
+    # unestablished: the sampler returns the failure status and coverage records
+    # "failed" -- never a clean-looking empty set.
+    estate = _estate("median")
+    ft = FixtureTransport(estate, list_status=503)  # object lists now 503
+    client = _live(estate, ft.transport)
+    client.connect()
+    res = client.rest("permissions")
+    assert res.ok is False
+    assert res.status == 503
+    assert res.items == []
+
+
+def test_permissions_sample_zero_keeps_project_level_only():
+    # A zero content sample still takes project-level grants in full -- the
+    # governance backbone is never dropped -- and no content grants.
+    estate = _estate("median")
+    ft = FixtureTransport(estate)
+    client = _live(estate, ft.transport, permissions_sample=0)
+    client.connect()
+    res = client.rest("permissions")
+    assert res.ok
+    assert all(g["sampled"] == 0 for g in res.items)
+    assert all(g["object_type"] == "project" for g in res.items)
+
+
 # -- Cloud/Server owner difference recorded as coverage ----------------------
 
 def test_owner_gap_recorded_as_partial_coverage():

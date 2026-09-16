@@ -33,6 +33,24 @@ _COLS = [
 
 _INVALID = re.compile(r"[\[\]\*\?/\\:]")
 
+# The per-group dominance state (findings.py) as it reads in the overview cell
+# and the group-sheet subtitle. A singular concept has one definition, so
+# "no dominant variant" would misread as a contest.
+_DOMINANCE_CELL = {"dominant": "yes", "contested": "no",
+                   "unmeasured": "unmeasured", "singular": "—"}
+_DOMINANCE_SUBTITLE = {
+    "dominant": "dominant variant present",
+    "contested": "no dominant variant",
+    "unmeasured": "dominance not measured this run",
+    "singular": "single definition",
+}
+
+
+def _dominance_cell(g):
+    # type: (dict) -> str
+    return _DOMINANCE_CELL.get(g.get("dominance"),
+                               "yes" if g.get("dominant") else "no")
+
 
 def _sheet_title(label, used):
     # type: (str, set) -> str
@@ -89,8 +107,7 @@ def _overview(ws, findings, groups):
         ws.cell(row=row, column=3, value=g.get("workbooks_affected"))
         ws.cell(row=row, column=4, value=g.get("disagreeing_variants"))
         ws.cell(row=row, column=5, value=g.get("variants_covering_80pct_views"))
-        ws.cell(row=row, column=6,
-                value="yes" if g.get("dominant") else "no")
+        ws.cell(row=row, column=6, value=_dominance_cell(g))
     widths = [30, 10, 11, 12, 10, 10]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
@@ -102,7 +119,10 @@ def _group_sheet(ws, g):
     ws["A1"].font = Font(bold=True, size=13)
     ws["A2"] = "%d variants  ·  %s" % (
         g.get("variant_count") or 0,
-        "dominant variant present" if g.get("dominant") else "no dominant variant")
+        _DOMINANCE_SUBTITLE.get(
+            g.get("dominance"),
+            "dominant variant present" if g.get("dominant")
+            else "no dominant variant"))
 
     header_row = 4
     for i, (label, width, _key) in enumerate(_COLS, start=1):

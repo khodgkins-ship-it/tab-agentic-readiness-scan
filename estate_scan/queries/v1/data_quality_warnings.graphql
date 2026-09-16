@@ -1,0 +1,30 @@
+# Query: data_quality_warnings
+# Data-quality warnings (GOV-03: certification/DQW divergence; DF-05 freshness
+# context). Each warning names the asset it is raised against via `asset`
+# (CanHaveLabels), whose luid joins back to the datasource so a *certified*
+# source carrying an *active* warning becomes a detectable governance
+# divergence. Read-only: a plain paginated connection with no filter. The root
+# field exists on every Metadata API schema, so a site without the Data
+# Management add-on simply returns an empty connection (an honest "no warnings"),
+# not a schema error.
+query data_quality_warnings($first: Int!, $after: String) {
+  dataQualityWarningsConnection(first: $first, after: $after) {
+    nodes {
+      id
+      luid
+      isActive
+      isSevere
+      isElevated
+      warningType
+      category
+      message
+      asset {
+        luid
+        name
+        __typename
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+    totalCount
+  }
+}

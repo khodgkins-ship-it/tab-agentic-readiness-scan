@@ -270,6 +270,101 @@ def _eval_source_owner_missing(store, run_id, th):
     return fires, count, evidence
 
 
+def _eval_root_table_column_divergence(store, run_id, th):
+    """DF-08. Two+ published sources built on the SAME physical (root) table can
+    model its columns inconsistently -- a form of sprawl the table-level fan-out
+    (DF-02) cannot see. The strong, low-noise signal is TYPE divergence: a
+    physical column that >=2 sources expose with different Tableau field data
+    types (one source reads `amount` as a string, another as a number) -- a
+    genuine modelling conflict. A source merely exposing a SUBSET of a table's
+    columns is intended narrowing, not drift, so it does NOT fire; name-set
+    differences are reported as context and only count toward firing when
+    `flag_name_divergence` is set (default off -- partial column overlap is
+    normal on wide fact tables and would over-fire). Count = divergent columns
+    (plus divergent tables when name divergence is enabled)."""
+    min_count = th.get("min_count", 1)
+    flag_names = th.get("flag_name_divergence", False)
+    # tables[table_key] = {"fullname", "sources": set,
+    #                      "cols": {col: {"types": set, "sources": set}}}
+    tables = {}  # type: Dict[str, dict]
+    for r in store.table_column_projection_shared(run_id):
+        t = tables.setdefault(r["table_key"], {
+            "fullname": r["table_fullname"], "sources": set(), "cols": {}})
+        t["sources"].add(r["datasource_id"])
+        c = t["cols"].setdefault(
+            r["column_name"], {"types": set(), "sources": set()})
+        c["sources"].add(r["datasource_id"])
+        if r["field_data_type"] is not None:
+            c["types"].add(r["field_data_type"])
+
+    type_divergent = []   # columns >=2 sources model with conflicting types
+    name_divergent = []   # tables whose sources expose different column sets
+    for tkey, t in tables.items():
+        label = t["fullname"] or tkey
+        n_sources = len(t["sources"])
+        for col, ci in sorted(t["cols"].items()):
+            if len(ci["types"]) >= 2:
+                type_divergent.append(
+                    {"table": label, "column": col,
+                     "types": sorted(ci["types"])})
+        partial = sorted(col for col, ci in t["cols"].items()
+                         if len(ci["sources"]) < n_sources)
+        if partial:
+            name_divergent.append(
+                {"table": label, "sources": n_sources,
+                 "columns_not_shared": partial[:50]})
+
+    count = len(type_divergent) + (len(name_divergent) if flag_names else 0)
+    fires = count >= min_count
+    evidence = {"type_divergent_columns": type_divergent[:50],
+                "type_divergent_count": len(type_divergent),
+                "name_divergent_tables": name_divergent[:50],
+                "name_divergent_count": len(name_divergent),
+                "flag_name_divergence": bool(flag_names),
+                "shared_tables": len(tables)}
+    return fires, count, evidence
+
+
+def _eval_no_data_quality_warnings(store, run_id, th):
+    """GOV-02 (informational). Zero data-quality warnings across the estate: the
+    platform's own integrity-signalling mechanism is going unused. Fires ONLY
+    when the DQW feed was actually measured (coverage `ok`) -- an unextracted or
+    failed feed reading as "no warnings" would be absence of measurement, not
+    health, so an unmeasured feed never fires this (coverage is first-class).
+    Count = warnings seen (0 when it fires)."""
+    status = store.coverage_status(run_id, "data_quality_warnings")
+    total = store.count("data_quality_warnings", run_id)
+    fires = (status == "ok") and total == 0
+    evidence = {"warning_count": total, "coverage_status": status,
+                "measured": status == "ok"}
+    return fires, total, evidence
+
+
+def _eval_certification_dqw_divergence(store, run_id, th):
+    """GOV-03 (warning). A certified source that nonetheless carries an ACTIVE
+    data-quality warning -- the trust signal (certification) diverges from the
+    health signal (the live warning). `require_elevated` (default off) narrows
+    firing to elevated / modern-severity warnings only, so the field team can
+    tighten this in rules.yaml without a code edit. Count = distinct certified
+    sources in divergence."""
+    min_count = th.get("min_count", 1)
+    require_elevated = th.get("require_elevated", False)
+    by_source = {}  # type: Dict[str, dict]
+    for r in store.certified_sources_with_active_warning(run_id):
+        if require_elevated and not r["is_elevated"]:
+            continue
+        by_source.setdefault(r["id"], {
+            "datasource": r["name"] or r["id"],
+            "warning_type": r["warning_type"],
+            "is_elevated": bool(r["is_elevated"]),
+            "is_severe": bool(r["is_severe"])})
+    count = len(by_source)
+    fires = count >= min_count
+    evidence = {"count": count, "require_elevated": require_elevated,
+                "sources": list(by_source.values())[:50]}
+    return fires, count, evidence
+
+
 EVALUATORS = {
     "formula_contains_user_context": _eval_user_context,
     "metric_group_variant_count": _eval_variant_count,
@@ -287,6 +382,9 @@ EVALUATORS = {
     "failed_refresh_recent_view": _eval_failed_refresh_recent_view,
     "custom_sql_grain_loss": _eval_custom_sql_grain_loss,
     "source_owner_missing": _eval_source_owner_missing,
+    "root_table_column_divergence": _eval_root_table_column_divergence,
+    "no_data_quality_warnings": _eval_no_data_quality_warnings,
+    "certification_dqw_divergence": _eval_certification_dqw_divergence,
 }
 
 

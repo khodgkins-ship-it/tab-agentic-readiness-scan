@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 from estate_scan import (APP_TEMPLATE_VERSION, QUERY_SET_VERSION, TOOL_VERSION)
 from estate_scan.derive.group import USER_CONTEXT_FUNCS
 from estate_scan.derive.rank import _cover_count, cover80_for
+from estate_scan.flags import load_rules
 
 _UC_RE = re.compile(r"\b(" + "|".join(USER_CONTEXT_FUNCS) + r")\s*\(",
                     re.IGNORECASE)
@@ -41,6 +42,7 @@ def build_findings(store, run_id, now=None):
             "definition_multiplicity": _definition_multiplicity(store, run_id),
             "security_exposure": _security_exposure(store, run_id, flags),
             "retirement": _retirement(store, run_id),
+            "governance_posture": _governance_posture(store, run_id),
         },
     }
 
@@ -101,13 +103,30 @@ def _meta(store, run_id, now):
 
 # -- finding one: definition multiplicity ------------------------------------
 
+# Sort order over the per-group `dominance` state: the hardest adjudication
+# leads. A genuinely contested concept (>=2 definitions, none winning) is a
+# governance problem and comes first; an unmeasured one (>=2 definitions, but
+# usage was not measured so which wins is undeterminable) next; a settled one (a
+# dominant variant) after; a singular concept (one definition -- not a
+# multiplicity finding at all) last.
+_DOMINANCE_ORDER = {"contested": 0, "unmeasured": 1, "dominant": 2, "singular": 3}
+
+
 def _definition_multiplicity(store, run_id):
     # type: (object, str) -> dict
+    # Dominance is usage-derived (rank.py orders variants by view count), so it
+    # is only determinable when usage_events measured. If that measure is not
+    # `ok` (e.g. REST 501 on the live path), "no dominant variant" cannot be
+    # asserted -- a concept is not "contested", its dominance is simply unknown
+    # (plan invariant 7). Multiplicity itself -- whether a concept has more than
+    # one definition -- is structural and stays determinable regardless.
+    usage_measured = store.coverage_status(run_id, "usage_events") == "ok"
     groups = []  # type: List[dict]
     for g in store.metric_groups(run_id):
         gid = g["group_id"]
         variants = store.group_variant_detail(run_id, gid)
         group_views = sum((v["view_count"] or 0) for v in variants)
+        variant_count = len(variants)
         # "materially disagreeing" = distinct resolved definitions among the
         # variants that carry usage; a definition nobody uses is not a live
         # disagreement. Falls back to all variants when none carry usage.
@@ -115,7 +134,19 @@ def _definition_multiplicity(store, run_id):
                        if (v["view_count"] or 0) > 0}
         disagreeing = len(used_hashes) or len(
             {v["normalized_hash"] for v in variants})
-        dominant = any(v["is_dominant"] for v in variants)
+        has_dominant = any(v["is_dominant"] for v in variants)
+        # A concept with a single definition is not multiplicity: there is
+        # nothing to adjudicate and no dominance to determine. Only >=2-variant
+        # concepts can be contested (and only when usage measured).
+        multiplicity = variant_count >= 2
+        if not multiplicity:
+            dominance = "singular"
+        elif not usage_measured:
+            dominance = "unmeasured"
+        elif has_dominant:
+            dominance = "dominant"
+        else:
+            dominance = "contested"
         # Optional VDS join (R3): when the full-mode `resolve` step executed this
         # group, attach each variant's tested figure and the group's reference +
         # most-material pair. Absent (empty map) when VDS did not run, so the
@@ -127,26 +158,38 @@ def _definition_multiplicity(store, run_id):
             "label": g["canonical_label"],
             "method": g["method"],
             "confidence": g["confidence"],
-            "variant_count": len(variants),
+            "variant_count": variant_count,
             "workbooks_affected": store.group_workbook_count(run_id, gid),
             "disagreeing_variants": disagreeing,
             "variants_covering_80pct_views": cover80_for(store, run_id, gid),
             "group_views": group_views,
-            "dominant": dominant,
+            "multiplicity": multiplicity,
+            "dominance": dominance,
+            # Kept for the working-detail artifacts (variants.xlsx) and the
+            # comparison: True only when a variant actually wins. A singular or
+            # unmeasured concept is False here, but the `dominance` state above is
+            # what the report renders so "no" is never shown for those.
+            "dominant": dominance == "dominant",
             "variants": [_variant(v, group_views, exec_by_field.get(v["field_id"]))
                          for v in variants],
         }
         if exec_rows:
             group["execution"] = _execution_summary(exec_rows)
         groups.append(group)
-    # Sort on absence of a dominant variant first, not variant count: fewer
-    # variants with no clear candidate is the harder adjudication (build brief
-    # section 6). Ties broken by disagreement, then size, then label.
-    groups.sort(key=lambda x: (x["dominant"], -x["disagreeing_variants"],
+    groups.sort(key=lambda x: (_DOMINANCE_ORDER[x["dominance"]],
+                               -x["disagreeing_variants"],
                                -x["variant_count"], x["label"]))
+    multiplicity_groups = [g for g in groups if g["multiplicity"]]
     return {
         "groups": groups,
-        "contested_group_count": sum(1 for g in groups if not g["dominant"]),
+        "usage_measured": usage_measured,
+        # Concepts carrying more than one definition -- the real multiplicity
+        # count, determinable with or without usage.
+        "multiplicity_group_count": len(multiplicity_groups),
+        # Of those, the ones with no dominant variant. Zero when usage was not
+        # measured: a contest we cannot see is not asserted.
+        "contested_group_count": sum(
+            1 for g in multiplicity_groups if g["dominance"] == "contested"),
     }
 
 
@@ -268,22 +311,227 @@ def _security_exposure(store, run_id, flags):
 
 def _retirement(store, run_id):
     # type: (object, str) -> dict
+    # The source-fanout consolidation signal is from lineage and always real.
+    # The view-based retirement signal depends on usage_events: if that measure
+    # is not `ok` (e.g. it returned 501 on the live path), zero views means
+    # "not measured", NOT "recoverable capacity". Null those fields rather than
+    # emit 0, so nothing reads as "every workbook is dead" (plan invariant 7).
     total = store.workbook_count(run_id)
-    zero = store.zero_view_workbooks(run_id)
-    views = sorted(store.workbook_view_counts(run_id), reverse=True)
     fanout = store.upstream_table_fanout(run_id)
     redundant = [r for r in fanout if (r["sources"] or 0) > 1]
-    return {
+    usage_measured = store.coverage_status(run_id, "usage_events") == "ok"
+    out = {
         "workbooks_total": total,
-        "zero_view_workbooks": len(zero),
-        "total_views": sum(views),
-        "workbooks_covering_70pct_views": _cover_count(views, 0.7),
-        "workbooks_covering_80pct_views": _cover_count(views, 0.8),
+        "usage_measured": usage_measured,
         "redundant_source_tables": len(redundant),
         "max_sources_per_table": max((r["sources"] for r in fanout), default=0),
-        "unused_workbook_sample": [
-            {"name": w["name"], "project_name": w["project_name"]}
-            for w in zero[:25]],
+    }
+    if usage_measured:
+        zero = store.zero_view_workbooks(run_id)
+        views = sorted(store.workbook_view_counts(run_id), reverse=True)
+        out.update({
+            "zero_view_workbooks": len(zero),
+            "total_views": sum(views),
+            "workbooks_covering_70pct_views": _cover_count(views, 0.7),
+            "workbooks_covering_80pct_views": _cover_count(views, 0.8),
+            "unused_workbook_sample": [
+                {"name": w["name"], "project_name": w["project_name"]}
+                for w in zero[:25]],
+        })
+    else:
+        out.update({
+            "zero_view_workbooks": None,
+            "total_views": None,
+            "workbooks_covering_70pct_views": None,
+            "workbooks_covering_80pct_views": None,
+            "unused_workbook_sample": [],
+        })
+    return out
+
+
+# -- finding four: governance posture (observed presence evidence) -----------
+
+def _governance_posture(store, run_id):
+    # type: (object, str) -> dict
+    """Non-gating observed-presence evidence for a governance arc the scan can
+    witness the *mechanism* of but does not *score* (build plan R4, the third
+    signal category). The scored arcs -- accountability (ownership coverage) and
+    assurance (certification coverage) -- already feed the maturity loop; this
+    block is different: it proves a governance mechanism EXISTS and is exercised
+    at all, and hands the interview concrete good and bad examples to dig into.
+    It adjusts NO maturity gate -- the detective arc stays interview-scored --
+    so it lives in `findings`, not in the facet/domain register.
+
+    Coverage is first-class throughout: an unmeasured feed reads `unmeasured`,
+    never `not_exercised`. Absence of measurement is not absence of the
+    mechanism, and the interview must be told which it is looking at."""
+    return {
+        "note": (
+            "Observed presence of governance mechanisms. Proof the mechanism is "
+            "in place and exercised, with good and bad examples for the "
+            "interview to probe -- observed by the scan, assessed by the "
+            "interview. Adjusts no maturity gate."),
+        # Ordered as the governance loop activates the arcs (rules.yaml
+        # governance_arcs): preventive first, then detective.
+        "arcs": [_preventive_posture(store, run_id),
+                 _detective_posture(store, run_id)],
+    }
+
+
+def _detective_posture(store, run_id):
+    # type: (object, str) -> dict
+    """The detective arc: does the estate run mechanisms that would *catch* a
+    data problem (certification attestations, data-quality warnings), and do the
+    two signals agree? Presence + divergence only; the tier is the interview's
+    to set."""
+    ds_ok = store.coverage_status(run_id, "datasources") == "ok"
+    dqw_ok = store.coverage_status(run_id, "data_quality_warnings") == "ok"
+
+    certified, published = store.datasource_certification_counts(run_id)
+    certification = _mechanism_presence(
+        "certification", ds_ok, exercised=(ds_ok and certified > 0),
+        detail={"certified_sources": certified if ds_ok else None,
+                "published_sources": published if ds_ok else None})
+
+    active, dqw_total = store.data_quality_warning_counts(run_id)
+    dqw = _mechanism_presence(
+        "data_quality_warnings", dqw_ok, exercised=(dqw_ok and dqw_total > 0),
+        detail={"warnings_total": dqw_total if dqw_ok else None,
+                "warnings_active": active if dqw_ok else None})
+
+    return {
+        "arc": "detective",
+        # The observed presence does not score the arc; the specialist does,
+        # informed by this evidence. Named explicitly so the report cannot imply
+        # a scan-derived tier.
+        "scored_by": "interview",
+        "mechanisms": [certification, dqw],
+        "divergence": _detective_divergence(store, run_id, ds_ok and dqw_ok),
+    }
+
+
+def _mechanism_presence(mechanism, measured, exercised, detail):
+    # type: (str, bool, bool, dict) -> dict
+    """One governance mechanism's presence signal. `unmeasured` when the feed
+    was not measured (coverage first-class -- NOT `not_exercised`); otherwise
+    `in_use` when it is exercised, `not_exercised` when the feed is measured but
+    the mechanism is going unused (a real, provable finding)."""
+    if not measured:
+        status = "unmeasured"
+    elif exercised:
+        status = "in_use"
+    else:
+        status = "not_exercised"
+    out = {"mechanism": mechanism, "measured": measured, "status": status}
+    out.update(detail)
+    return out
+
+
+def _detective_divergence(store, run_id, measured):
+    # type: (object, str, bool) -> dict
+    """Certified sources that nonetheless carry an ACTIVE data-quality warning
+    (the GOV-03 divergence set) as the "bad examples", and certified sources
+    that are clean as the "good examples" -- the interview shows the specialist
+    what good and bad look like on this estate. Needs both the datasources and
+    data-quality-warning feeds measured; unmeasured is reported honestly rather
+    than as zero divergence. Source names only, no owner names."""
+    if not measured:
+        return {"measured": False, "count": None,
+                "bad_examples": [], "good_examples": []}
+    seen = set()  # type: set
+    bad = []  # type: List[dict]
+    for r in store.certified_sources_with_active_warning(run_id):
+        # A source can carry more than one active warning; count it once.
+        if r["id"] in seen:
+            continue
+        seen.add(r["id"])
+        bad.append({"datasource_name": r["name"] or r["id"],
+                    "warning_type": r["warning_type"],
+                    "is_elevated": bool(r["is_elevated"])})
+    good = [{"datasource_name": r["name"] or r["id"]}
+            for r in store.certified_sources_without_active_warning(run_id, 10)]
+    return {
+        "measured": True,
+        "count": len(bad),
+        "bad_examples": bad[:10],
+        "good_examples": good,
+    }
+
+
+def _preventive_posture(store, run_id):
+    # type: (object, str) -> dict
+    """The preventive arc: does the estate exercise access control at all
+    (explicit permission grants), and does it use explicit restriction (Deny
+    rules)? Plus the exposure evidence -- broad grants of a powerful capability
+    -- and scoped counter-examples. Presence + exposure only; the tier is the
+    interview's to set. SEC-02 the flag scores permissive-grant *firing*
+    separately; this block never gates."""
+    perms_ok = store.coverage_status(run_id, "permissions") == "ok"
+    total, objects, deny = (store.permission_grant_counts(run_id)
+                            if perms_ok else (0, 0, 0))
+
+    scoping = _mechanism_presence(
+        "permission_grants", perms_ok, exercised=(perms_ok and total > 0),
+        detail={"grants_total": total if perms_ok else None,
+                "objects_covered": objects if perms_ok else None})
+    restriction = _mechanism_presence(
+        "explicit_deny", perms_ok, exercised=(perms_ok and deny > 0),
+        detail={"deny_rules": deny if perms_ok else None})
+
+    return {
+        "arc": "preventive",
+        # As with the detective arc, the observed presence does not score the
+        # tier; the specialist does, informed by this evidence.
+        "scored_by": "interview",
+        "mechanisms": [scoping, restriction],
+        "exposure": _preventive_exposure(store, run_id, perms_ok),
+    }
+
+
+def _permissive_policy():
+    # type: () -> tuple
+    """Which grantees count as an 'everyone' group and which capabilities count
+    as sensitive -- sourced from the SEC-02 rule so the exposure evidence uses
+    the SAME definition as the flag and can never contradict it. Defaults mirror
+    the SEC-02 evaluator (flags/engine.py) so a missing entry degrades to the
+    shipped policy rather than silently widening exposure."""
+    th = (load_rules().get("flags", {}).get("SEC-02", {}) or {}).get(
+        "threshold", {}) or {}
+    everyone = set(th.get("everyone_grantees", ["AllUsers"]))
+    sensitive = set(th.get("sensitive_capabilities",
+                           ["Write", "Delete", "ChangePermissions",
+                            "ProjectLeader"]))
+    return everyone, sensitive
+
+
+def _preventive_exposure(store, run_id, measured):
+    # type: (object, str, bool) -> dict
+    """Permissive grants -- an Allow of a sensitive capability to an 'everyone'
+    group -- as the "bad examples" (the SEC-02 exposure set), and the same
+    sensitive capabilities scoped to a NAMED group as the "good examples". Needs
+    the permissions feed measured; unmeasured is reported honestly, never as
+    zero exposure. Object/group identifiers only -- good examples are restricted
+    to group grantees by construction, so a user name can never leak."""
+    if not measured:
+        return {"measured": False, "count": None,
+                "bad_examples": [], "good_examples": []}
+    everyone, sensitive = _permissive_policy()
+    bad = []   # type: List[dict]
+    good = []  # type: List[dict]
+    for r in store.permission_grants(run_id):
+        if r["mode"] != "Allow" or r["capability"] not in sensitive:
+            continue
+        row = {"object_type": r["object_type"], "object_id": r["object_id"],
+               "capability": r["capability"], "grantee": r["grantee_id"]}
+        if r["grantee_id"] in everyone:
+            bad.append(row)
+        elif r["grantee_type"] == "group":
+            good.append(row)
+    return {
+        "measured": True,
+        "count": len(bad),
+        "bad_examples": bad[:10],
+        "good_examples": good[:10],
     }
 
 

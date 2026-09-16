@@ -91,6 +91,34 @@ def test_every_registered_rest_resource_is_get():
         assert rest_resources.get(name).method == "GET", name
 
 
+def test_every_permission_resource_is_get():
+    # The per-object permission specs the sampler reads through are a separate
+    # registry, but they are the same GET-only gate: a write verb there would
+    # fail the build exactly like any other REST resource.
+    assert rest_resources.permission_names(), "permission registry is empty"
+    for object_type, spec in rest_resources.PERMISSION_RESOURCES.items():
+        assert spec.method == "GET", object_type
+        assert "{object_id}" in spec.path, object_type   # per-object, not bulk
+
+
+def test_permissions_sampler_issues_only_get_requests():
+    # End to end: collecting permissions on the live path touches the wire only
+    # with GETs (object lists + per-object permission reads) -- no write verb,
+    # no POST outside auth/metadata.
+    estate = _estate()
+    ft = FixtureTransport(estate)
+    client = LiveClient(_config(estate), transport=ft.transport,
+                        credentials=Credentials("pat", "secret", "env"))
+    client.connect()
+    ft.requests.clear()
+    client.rest("permissions")
+    perm_calls = [(m, p) for (m, p) in ft.requests]
+    assert perm_calls, "the sampler issued no requests"
+    assert all(m == "GET" for (m, p) in perm_calls), perm_calls
+    assert any(p.endswith("/permissions") for (m, p) in perm_calls)
+    client.close()
+
+
 def test_registering_a_write_verb_is_refused():
     for verb in ("POST", "PUT", "PATCH", "DELETE"):
         with pytest.raises(ReadOnlyViolation):

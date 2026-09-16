@@ -254,6 +254,28 @@ class Store(object):
                     "(run_id, field_id, sheet_id, workbook_id) VALUES (?,?,?,?)",
                     (run_id, n["id"], s.get("id") or "",
                      wb.get("id") or wb.get("luid") or ""))
+            # DF-08: the physical columns this ColumnField maps onto -- one
+            # projection row per (source, physical table, column). Calculated
+            # fields carry no upstreamColumns, so this no-ops for them. The
+            # table key coalesces fullName -> luid -> id, matching how lineage
+            # keys the physical table (load.py _load_ds_lineage). INSERT OR
+            # IGNORE: if two fields in this source hit the same physical column,
+            # the first wins -- column-set membership is what DF-08 compares.
+            for c in n.get("upstreamColumns") or []:
+                tbl = c.get("table") or {}
+                table_fullname = tbl.get("fullName")
+                table_key = table_fullname or tbl.get("luid") or tbl.get("id")
+                col_name = c.get("name")
+                if not table_key or not col_name:
+                    continue
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO table_column_projection "
+                    "(run_id, datasource_id, table_key, table_fullname, "
+                    " column_name, remote_type, field_data_type, field_role) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (run_id, datasource_id, table_key, table_fullname,
+                     col_name, c.get("remoteType"), n.get("dataType"),
+                     n.get("role")))
         return len(nodes)
 
     def load_usage_events(self, run_id, items):
@@ -315,6 +337,46 @@ class Store(object):
                  p.get("grantee_type"), p.get("grantee_id"),
                  p.get("capability"), p.get("mode"), _b(p.get("sampled"))))
         return len(items)
+
+    def load_database_tables(self, run_id, nodes):
+        # type: (str, List[dict]) -> int
+        """Physical tables (DF-07 grain companion). `column_count` and
+        `downstream_datasource_count` come straight off the connection
+        totalCounts; isEmbedded/isCertified feed governance. Keyed on id so a
+        resume overwrites rather than duplicates."""
+        for n in nodes:
+            cols = (n.get("columnsConnection") or {}).get("totalCount")
+            down = (n.get("downstreamDatasourcesConnection") or {}).get("totalCount")
+            self.conn.execute(
+                "INSERT OR REPLACE INTO database_tables "
+                "(run_id, id, luid, name, full_name, schema_name, "
+                " connection_type, is_embedded, is_certified, column_count, "
+                " downstream_datasource_count) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (run_id, n["id"], n.get("luid"), n.get("name"),
+                 n.get("fullName"), n.get("schema"), n.get("connectionType"),
+                 _b(n.get("isEmbedded")), _b(n.get("isCertified")), cols, down))
+        return len(nodes)
+
+    def load_data_quality_warnings(self, run_id, nodes):
+        # type: (str, List[dict]) -> int
+        """Data-quality warnings (GOV-03). `asset_luid` is the luid of the warned
+        asset (a data source, workbook, ...), so it joins datasources.luid to
+        surface a certified source that nonetheless carries an active warning.
+        The message rides like formula text -- redacted from the presentation
+        build downstream."""
+        for n in nodes:
+            asset = n.get("asset") or {}
+            self.conn.execute(
+                "INSERT OR REPLACE INTO data_quality_warnings "
+                "(run_id, id, luid, asset_luid, asset_name, asset_type, "
+                " is_active, is_severe, is_elevated, warning_type, category, "
+                " message) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (run_id, n["id"], n.get("luid"), asset.get("luid"),
+                 asset.get("name"), asset.get("__typename"),
+                 _b(n.get("isActive")), _b(n.get("isSevere")),
+                 _b(n.get("isElevated")), n.get("warningType"),
+                 n.get("category"), n.get("message")))
+        return len(nodes)
 
     # -- derive: read fields, write resolved formulas & refs -----------------
     def fields_for_run(self, run_id):
@@ -506,6 +568,18 @@ class Store(object):
             "SELECT * FROM coverage WHERE run_id=? ORDER BY measure", (run_id,))
         return cur.fetchall()
 
+    def coverage_status(self, run_id, measure):
+        # type: (str, str) -> Optional[str]
+        """Status of one coverage measure, or None if never recorded. Lets a
+        downstream facet or finding refuse to read an unmeasured source as a
+        real value (coverage is first-class: an unmeasured dimension must never
+        read as clean). Status is one of ok | partial | failed | skipped |
+        unavailable."""
+        row = self.conn.execute(
+            "SELECT status FROM coverage WHERE run_id=? AND measure=?",
+            (run_id, measure)).fetchone()
+        return row["status"] if row else None
+
     # -- flags (M5) ---------------------------------------------------------
     def clear_flags(self, run_id):
         # type: (str) -> None
@@ -586,6 +660,39 @@ class Store(object):
             (run_id,))
         return cur.fetchall()
 
+    def table_column_projection_shared(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        """Column projections for physical tables shared by >=2 published
+        sources -- the raw material for DF-08 (root-table column divergence).
+        Restricted to fan-out >=2 because a table touched by a single source
+        cannot diverge; the evaluator does the set/type comparison and applies
+        the divergence threshold (measure returns raw rows, per the contract).
+        Ordered for a stable evidence rendering."""
+        cur = self.conn.execute(
+            "SELECT p.table_key AS table_key, p.table_fullname AS table_fullname, "
+            "       p.datasource_id AS datasource_id, p.column_name AS column_name, "
+            "       p.remote_type AS remote_type, "
+            "       p.field_data_type AS field_data_type, p.field_role AS field_role "
+            "FROM table_column_projection p "
+            "JOIN ( SELECT table_key FROM table_column_projection WHERE run_id=? "
+            "       GROUP BY table_key "
+            "       HAVING COUNT(DISTINCT datasource_id) >= 2 ) shared "
+            "  ON shared.table_key = p.table_key "
+            "WHERE p.run_id=? "
+            "ORDER BY p.table_key, p.datasource_id, p.column_name",
+            (run_id, run_id))
+        return cur.fetchall()
+
+    def table_column_projection_count(self, run_id):
+        # type: (str) -> int
+        """How many column-projection rows this run captured. The runner reads
+        this to set `column_lineage` coverage: zero rows means DF-08 could not
+        be measured (an all-calculated estate, or upstreamColumns unavailable),
+        which must read as unmeasured -- never as a clean 'no divergence'."""
+        return self.conn.execute(
+            "SELECT COUNT(*) c FROM table_column_projection WHERE run_id=?",
+            (run_id,)).fetchone()["c"]
+
     def published_on_published_edges(self, run_id):
         # type: (str) -> List[sqlite3.Row]
         """downstream_id -> upstream_id edges where both are published sources.
@@ -635,6 +742,19 @@ class Store(object):
             "ORDER BY object_type, object_id, grantee_type, grantee_id, capability",
             (run_id,))
         return cur.fetchall()
+
+    def permission_grant_counts(self, run_id):
+        # type: (str) -> Tuple[int, int, int]
+        """(total grants, distinct objects, explicit Deny rules) recorded -- the
+        preventive arc's presence signal that the access model is exercised at
+        all, and that explicit restriction (a Deny) is in use. Counts only; which
+        grants are permissive stays a rules.yaml judgement (see SEC-02)."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) total, "
+            "COUNT(DISTINCT object_type || ':' || object_id) objects, "
+            "COALESCE(SUM(CASE WHEN mode='Deny' THEN 1 ELSE 0 END), 0) deny "
+            "FROM permissions WHERE run_id=?", (run_id,)).fetchone()
+        return row["total"], row["objects"], row["deny"]
 
     def datasource_field_counts(self, run_id):
         # type: (str) -> List[sqlite3.Row]
@@ -714,6 +834,62 @@ class Store(object):
             (run_id,)).fetchone()["c"]
         return gb, uf, total
 
+    def database_table_counts(self, run_id):
+        # type: (str) -> Tuple[int, int, int, int]
+        """(embedded, certified, max_downstream_datasources, total) over physical
+        tables. `max_downstream` is the fan-out of the most-shared table -- the
+        consolidation signal from the physical side (DF-07)."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) total, "
+            "  COALESCE(SUM(is_embedded),0) embedded, "
+            "  COALESCE(SUM(is_certified),0) certified, "
+            "  COALESCE(MAX(downstream_datasource_count),0) max_down "
+            "FROM database_tables WHERE run_id=?", (run_id,)).fetchone()
+        return row["embedded"], row["certified"], row["max_down"], row["total"]
+
+    def certified_sources_with_active_warning(self, run_id):
+        # type: (str) -> List[sqlite3.Row]
+        """Published sources that are certified yet carry an ACTIVE data-quality
+        warning (GOV-03: certification/DQW divergence). The join is by luid --
+        the warning's asset_luid against the source's luid. Extraction-side
+        helper; the R4 flag decides how to weigh it."""
+        cur = self.conn.execute(
+            "SELECT d.id, d.name, d.luid, w.id AS warning_id, w.is_severe, "
+            "       w.is_elevated, w.warning_type "
+            "FROM data_quality_warnings w "
+            "JOIN datasources d ON d.run_id=w.run_id AND d.luid=w.asset_luid "
+            "WHERE w.run_id=? AND w.is_active=1 AND d.is_certified=1 "
+            "ORDER BY d.id", (run_id,))
+        return cur.fetchall()
+
+    def certified_sources_without_active_warning(self, run_id, limit=25):
+        # type: (str, int) -> List[sqlite3.Row]
+        """Certified published sources carrying NO active data-quality warning --
+        the "good examples" for the detective arc's presence evidence
+        (governance_posture): certification and health signals agree. The
+        anti-join is by luid against active warnings; the direct complement of
+        `certified_sources_with_active_warning`. Names/luids only (no owner) so
+        the block survives both redaction builds."""
+        cur = self.conn.execute(
+            "SELECT d.id, d.name, d.luid FROM datasources d "
+            "WHERE d.run_id=? AND d.is_certified=1 AND NOT EXISTS ("
+            "  SELECT 1 FROM data_quality_warnings w "
+            "  WHERE w.run_id=d.run_id AND w.asset_luid=d.luid AND w.is_active=1"
+            ") ORDER BY d.id LIMIT ?", (run_id, limit))
+        return cur.fetchall()
+
+    def data_quality_warning_counts(self, run_id):
+        # type: (str) -> Tuple[int, int]
+        """(active, total) data-quality warnings. `total` is every warning row
+        extracted -- the presence signal that the DQW mechanism is exercised at
+        all; `active` is the live subset currently signalling. Distinct from
+        whether the feed was measured (coverage first-class): a zero here means
+        no warnings, an unmeasured feed is reported separately as `unmeasured`."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) total, COALESCE(SUM(is_active),0) active "
+            "FROM data_quality_warnings WHERE run_id=?", (run_id,)).fetchone()
+        return row["active"], row["total"]
+
     def datasources_missing_owner(self, run_id):
         # type: (str) -> List[sqlite3.Row]
         """Published sources with no recorded owner (GOV-01). No owner means no
@@ -722,6 +898,18 @@ class Store(object):
             "SELECT id, name FROM datasources WHERE run_id=? "
             "AND TRIM(COALESCE(owner,''))='' ORDER BY id", (run_id,))
         return cur.fetchall()
+
+    def datasource_certification_counts(self, run_id):
+        # type: (str) -> Tuple[int, int]
+        """(certified, total) published datasources -- the observed reading on the
+        governance assurance arc. Certification is Tableau's data-trust
+        attestation, so the certified share is a recorded assurance signal (as
+        distinct from the physical-table certified count in
+        `database_table_counts`)."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) total, COALESCE(SUM(is_certified),0) certified "
+            "FROM datasources WHERE run_id=?", (run_id,)).fetchone()
+        return row["certified"], row["total"]
 
     # -- read helpers for the planner / tests -------------------------------
     def datasource_ids(self, run_id):

@@ -150,6 +150,38 @@ class FixtureClient(EstateClient):
                 for d in cs.get("downstreamDatasources", [])],
         }
 
+    @staticmethod
+    def _p_databasetable(t):
+        # Public shape of a DatabaseTable node. Column count and downstream fan-out
+        # ride as connection totalCounts, exactly as the real API serves them.
+        return {
+            "id": t["id"], "luid": t.get("luid"), "name": t.get("name"),
+            "fullName": t.get("fullName"), "schema": t.get("schema"),
+            "connectionType": t.get("connectionType"),
+            "isEmbedded": t.get("isEmbedded", False),
+            "isCertified": t.get("isCertified", False),
+            "columnsConnection": {"totalCount": t.get("columnCount", 0)},
+            "downstreamDatasourcesConnection": {
+                "totalCount": t.get("downstreamDatasourceCount", 0)},
+        }
+
+    @staticmethod
+    def _p_dqw(w):
+        # Public shape of a DataQualityWarning node. `asset` (CanHaveLabels)
+        # exposes only luid/name/__typename -- enough for the GOV-03 luid join.
+        asset = w.get("asset") or {}
+        return {
+            "id": w["id"], "luid": w.get("luid"),
+            "isActive": w.get("isActive", False),
+            "isSevere": w.get("isSevere", False),
+            "isElevated": w.get("isElevated", False),
+            "warningType": w.get("warningType"),
+            "category": w.get("category"),
+            "message": w.get("message"),
+            "asset": {"luid": asset.get("luid"), "name": asset.get("name"),
+                      "__typename": asset.get("__typename")},
+        }
+
     def _sheets_used_in(self, field):
         # Build referencedBySheets from the hidden usage linkage: one entry per
         # referencing workbook, carrying that workbook's first sheet. The join to
@@ -168,6 +200,27 @@ class FixtureClient(EstateClient):
             })
         return out
 
+    def _upstream_columns(self, field):
+        # DF-08: the physical columns this ColumnField maps onto. Rebuilt to the
+        # exact `upstreamColumns { name remoteType table { id name luid
+        # fullName } }` shape the query selects, so the fixture and live paths
+        # hand the loader identical nodes. Column-backed fields only -- a
+        # calculated field carries none, so DF-08 reads unmeasured, not clean.
+        out = []
+        for c in field.get("upstreamColumns") or []:
+            tbl = c.get("table") or {}
+            out.append({
+                "name": c.get("name"),
+                "remoteType": c.get("remoteType"),
+                "table": {
+                    "id": tbl.get("id"),
+                    "name": tbl.get("name"),
+                    "luid": tbl.get("luid"),
+                    "fullName": tbl.get("fullName"),
+                },
+            })
+        return out
+
     def _p_field(self, f):
         node = {
             "__typename": f.get("__typename"),
@@ -183,6 +236,7 @@ class FixtureClient(EstateClient):
         elif f.get("__typename") == "ColumnField":
             node["dataType"] = f.get("dataType")
             node["role"] = f.get("role")
+            node["upstreamColumns"] = self._upstream_columns(f)
         return node
 
     # -- pagination ----------------------------------------------------------
@@ -238,6 +292,15 @@ class FixtureClient(EstateClient):
             return self._connection("custom_sql", "customSQLTablesConnection",
                                     self._estate.get("custom_sql", []),
                                     self._p_customsql, v)
+        if query_name == "database_tables":
+            return self._connection("database_tables", "databaseTablesConnection",
+                                    self._estate.get("database_tables", []),
+                                    self._p_databasetable, v)
+        if query_name == "data_quality_warnings":
+            return self._connection("data_quality_warnings",
+                                    "dataQualityWarningsConnection",
+                                    self._estate.get("data_quality_warnings", []),
+                                    self._p_dqw, v)
         if query_name == "datasource_fields":
             return self._datasource_fields(v)
         return classify_graphql(400, {"error": "unknown query: %s" % query_name})

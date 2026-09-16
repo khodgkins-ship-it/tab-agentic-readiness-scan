@@ -14,7 +14,11 @@
                  unscored_dimensions, confidence}]
      flags     [{id, severity, confidence, facet, domain, count}]
      coverage  [{measure, status, reason}]
-     findings  {definition_multiplicity, security_exposure, retirement}
+     findings  {definition_multiplicity, security_exposure, retirement,
+                governance_posture}
+       governance_posture.arcs[] each carry mechanisms[] plus one contrast
+       block: the detective arc a `divergence` (certification vs data-quality),
+       the preventive arc an `exposure` (permissive grants vs scoped grants).
 */
 (function () {
   "use strict";
@@ -89,12 +93,15 @@
         var dm = (DATA.findings && DATA.findings.definition_multiplicity) || {};
         var sx = (DATA.findings && DATA.findings.security_exposure) || {};
         var rt = (DATA.findings && DATA.findings.retirement) || {};
-        facts.appendChild(fact("Contested metric concepts",
-          num(dm.contested_group_count), false));
+        // Multiply-defined is the honest headline: it is structural and stays
+        // determinable even when usage (and thus contest) was not measured.
+        facts.appendChild(fact("Multiply-defined concepts",
+          num(dm.multiplicity_group_count), false));
         facts.appendChild(fact("Access rules in the view layer",
           num(sx.user_context_field_count), false));
         facts.appendChild(fact("Zero-view workbooks",
-          num(rt.zero_view_workbooks), false));
+          rt.usage_measured === false ? "not measured"
+                                      : num(rt.zero_view_workbooks), false));
       } else {
         // Three facts, drawn from the primary decision domain. No synthesis.
         var d = pickPrimaryDomain();
@@ -159,9 +166,27 @@
         sec.appendChild(el("p", {class: "section-kicker",
           text: "Finding 1 of 3 · speaks to the analytics owner"}));
         sec.appendChild(el("h2", {text: "Definition multiplicity"}));
-        sec.appendChild(el("p", {class: "lede"}, [txt(
-          groups.length + " metric concept(s) in scope; " +
-          (dm.contested_group_count || 0) + " with no dominant variant.")]));
+        var multi = dm.multiplicity_group_count || 0;
+        var lede = groups.length + " metric concept(s) in scope; " +
+          multi + " defined more than once";
+        if (!multi) lede += ".";
+        else if (dm.usage_measured === false)
+          lede += ". Which variant dominates was not measured this run " +
+            "(usage_events unavailable) — see coverage; a concept here is " +
+            "multiply-defined, not shown as contested.";
+        else
+          lede += "; " + (dm.contested_group_count || 0) +
+            " with no dominant variant.";
+        sec.appendChild(el("p", {class: "lede"}, [txt(lede)]));
+
+        // Sort order over the per-group dominance state (mirrors findings.py):
+        // contested first, then unmeasured, then dominant, then singular.
+        var DOM_ORDER = {contested: 0, unmeasured: 1, dominant: 2, singular: 3};
+        function domRank(g) {
+          var d = g.dominance;
+          if (d in DOM_ORDER) return DOM_ORDER[d];
+          return g.dominant ? DOM_ORDER.dominant : DOM_ORDER.contested;
+        }
 
         var cols = [
           {key: "label", label: "Metric", num: false},
@@ -181,7 +206,7 @@
         sec.appendChild(copyButton(function () { return tableToTsv(table); }));
 
         function defaultCmp(a, b) {
-          return (a.dominant - b.dominant) ||
+          return (domRank(a) - domRank(b)) ||
             (b.disagreeing_variants - a.disagreeing_variants) ||
             (b.variant_count - a.variant_count) ||
             a.label.localeCompare(b.label);
@@ -223,9 +248,21 @@
             tr.appendChild(el("td", {class: "num", text: num(g.disagreeing_variants)}));
             tr.appendChild(el("td", {class: "num",
               text: num(g.variants_covering_80pct_views)}));
-            var dcell = el("td", {}, [g.dominant
-              ? txt("yes")
-              : el("span", {class: "no-dominant", text: "no"})]);
+            // Singular concept (one definition) shows "—", not "no": there is
+            // no dominance to lack. Unmeasured shows the honest word, not "no".
+            var dom = g.dominance ||
+              (g.dominant ? "dominant" : (g.variant_count > 1 ? "contested"
+                                                              : "singular"));
+            var dcell;
+            if (dom === "dominant") dcell = el("td", {}, [txt("yes")]);
+            else if (dom === "singular")
+              dcell = el("td", {class: "muted"}, [txt("—")]);
+            else if (dom === "unmeasured")
+              dcell = el("td", {}, [el("span",
+                {class: "no-dominant", text: "unmeasured"})]);
+            else
+              dcell = el("td", {}, [el("span",
+                {class: "no-dominant", text: "no"})]);
             tr.appendChild(dcell);
             var detail = null;
             function toggle() {
@@ -398,6 +435,13 @@
   // =====================================================================
   function renderRetirement() {
     var r = (DATA.findings && DATA.findings.retirement) || {};
+    // Coverage honesty (plan invariant 7): the view-based signal only exists
+    // when usage_events was measured. When it was not (e.g. 501 on the live
+    // path), zero_view_workbooks is null; "0" here would read as "unused", not
+    // "not measured". Absent flag => measured, for back-compat with older
+    // payloads. The lineage/fanout signal is always real, so it renders either
+    // way.
+    var measured = r.usage_measured !== false;
     addSection("finding-retirement", "Finding 3 · Retirement case",
       function (sec) {
         sec.classList.add("finding");
@@ -405,22 +449,199 @@
           text: "Finding 3 of 3 · speaks to the analytics budget owner"}));
         sec.appendChild(el("h2", {text: "Retirement case"}));
         var ul = el("ul");
-        ul.appendChild(el("li", {text:
-          num(r.zero_view_workbooks) + " of " + num(r.workbooks_total) +
-          " workbooks drew no views in the window — recoverable capacity."}));
-        ul.appendChild(el("li", {text:
-          num(r.workbooks_covering_80pct_views) + " workbook(s) carry 80% of all " +
-          num(r.total_views) + " views."}));
+        if (measured) {
+          ul.appendChild(el("li", {text:
+            num(r.zero_view_workbooks) + " of " + num(r.workbooks_total) +
+            " workbooks drew no views in the window — recoverable capacity."}));
+          ul.appendChild(el("li", {text:
+            num(r.workbooks_covering_80pct_views) + " workbook(s) carry 80% of all " +
+            num(r.total_views) + " views."}));
+        } else {
+          ul.appendChild(el("li", {text:
+            "Workbook view data was not measured for this run (usage_events " +
+            "unavailable), so view-based retirement candidates cannot be " +
+            "assessed. Zero views here means not measured, not unused — see the " +
+            "coverage panel."}));
+        }
         ul.appendChild(el("li", {text:
           num(r.redundant_source_tables) + " upstream table(s) feed more than one " +
           "published source (max " + num(r.max_sources_per_table) +
           " on one table) — candidate consolidation."}));
         sec.appendChild(ul);
         sec.appendChild(el("p", {text:
-          "Presented as recoverable capacity, not waste: retiring unused content " +
-          "and consolidating redundant sources funds the remediation without new " +
-          "money."}));
+          measured
+            ? "Presented as recoverable capacity, not waste: retiring unused " +
+              "content and consolidating redundant sources funds the remediation " +
+              "without new money."
+            : "Source-table consolidation is drawn from lineage and stands on its " +
+              "own; the view-based retirement case reopens once usage is measured."}));
       });
+  }
+
+  // =====================================================================
+  // Governance posture: observed presence evidence (non-gating)
+  // =====================================================================
+  // Not one of the three GTM findings and not a score: proof a governance
+  // mechanism is in place and exercised, with good/bad examples the interview
+  // digs into. Rendered as "observed by the scan, assessed by the interview".
+  // Coverage first-class: an unmeasured feed reads "not measured", never "not
+  // in use". Renders identically in framing-light -- it carries no ladder
+  // language.
+  var MECH_LABEL = {certification: "Certification",
+                    data_quality_warnings: "Data-quality warnings",
+                    permission_grants: "Permission grants",
+                    explicit_deny: "Explicit Deny rules"};
+  var STATUS_LABEL = {in_use: "in use", not_exercised: "not exercised",
+                      unmeasured: "not measured"};
+
+  function mechDetail(m) {
+    if (!m.measured) return "feed not measured this run";
+    if (m.mechanism === "certification") {
+      return num(m.certified_sources) + " of " + num(m.published_sources) +
+        " published sources certified";
+    }
+    if (m.mechanism === "data_quality_warnings") {
+      return num(m.warnings_total) + " warning(s), " + num(m.warnings_active) +
+        " active";
+    }
+    if (m.mechanism === "permission_grants") {
+      return num(m.grants_total) + " grant(s) across " +
+        num(m.objects_covered) + " object(s)";
+    }
+    if (m.mechanism === "explicit_deny") {
+      return num(m.deny_rules) + " explicit Deny rule(s)";
+    }
+    return "—";
+  }
+
+  function renderGovernancePosture() {
+    var gp = (DATA.findings && DATA.findings.governance_posture) || {};
+    var arcs = gp.arcs || [];
+    if (!arcs.length) return;
+    addSection("finding-governance", "Governance posture", function (sec) {
+      sec.classList.add("finding");
+      sec.appendChild(el("p", {class: "section-kicker",
+        text: "Observed presence · assessed by the interview"}));
+      sec.appendChild(el("h2", {text: "Governance posture"}));
+      sec.appendChild(el("p", {class: "lede"}, [txt(
+        "Proof a governance mechanism is in place and exercised, with good and " +
+        "bad examples for the interview to probe. Observed by the scan, " +
+        "assessed by the interview — evidence only, never a rating.")]));
+
+      arcs.forEach(function (arc) {
+        var name = arc.arc || "?";
+        sec.appendChild(el("h3", {text:
+          name.charAt(0).toUpperCase() + name.slice(1) +
+          " arc — observed, assessed by interview"}));
+
+        var wrap = el("div", {class: "tbl-wrap"});
+        var t = el("table", {class: "grid"});
+        var th = el("thead"); th.appendChild(el("tr", {}, [
+          el("th", {scope: "col", text: "Mechanism"}),
+          el("th", {scope: "col", text: "Status"}),
+          el("th", {scope: "col", text: "Detail"})]));
+        t.appendChild(th);
+        var tb = el("tbody");
+        (arc.mechanisms || []).forEach(function (m) {
+          tb.appendChild(el("tr", {}, [
+            el("td", {}, [txt(MECH_LABEL[m.mechanism] || m.mechanism)]),
+            el("td", {}, [txt(STATUS_LABEL[m.status] || m.status)]),
+            el("td", {}, [txt(mechDetail(m))])]));
+        });
+        t.appendChild(tb); wrap.appendChild(t); sec.appendChild(wrap);
+
+        // Each arc carries one contrast block: the detective arc a
+        // certification/DQW divergence, the preventive arc a permission
+        // exposure. Render whichever is present.
+        if (arc.divergence) renderDivergence(sec, arc.divergence);
+        if (arc.exposure) renderExposure(sec, arc.exposure);
+      });
+    });
+  }
+
+  function renderDivergence(sec, dv) {
+    if (!dv.measured) {
+      sec.appendChild(el("p", {text:
+        "Certification/data-quality divergence was not measured this run (a " +
+        "required feed was unavailable — see the coverage panel). No " +
+        "divergence is asserted; absence of measurement is not agreement."}));
+      return;
+    }
+    sec.appendChild(el("p", {}, [txt(
+      num(dv.count) + " certified source(s) carry an active data-quality " +
+      "warning: the trust signal (certification) disagrees with the health " +
+      "signal (the live warning).")]));
+
+    var bad = dv.bad_examples || [];
+    var good = dv.good_examples || [];
+    var det = el("details", {class: "expander"});
+    det.appendChild(el("summary", {}, [txt(
+      "Examples for the interview (" + num(bad.length) + " warned, " +
+      num(good.length) + " clean)")]));
+    var body = el("div", {class: "expander-body"});
+    if (bad.length) {
+      body.appendChild(el("p", {}, [el("strong", {text:
+        "Certified but warned — what slipped past certification?"})]));
+      var bl = el("ul");
+      bad.forEach(function (e) {
+        bl.appendChild(el("li", {text:
+          e.datasource_name + " — " + (e.warning_type || "warning") +
+          (e.is_elevated ? " (elevated)" : "")}));
+      });
+      body.appendChild(bl);
+    }
+    if (good.length) {
+      body.appendChild(el("p", {}, [el("strong", {text:
+        "Certified and clean — what good looks like"})]));
+      var gl = el("ul");
+      good.forEach(function (e) {
+        gl.appendChild(el("li", {text: e.datasource_name}));
+      });
+      body.appendChild(gl);
+    }
+    det.appendChild(body);
+    sec.appendChild(det);
+  }
+
+  function grantLine(e) {
+    return e.grantee + " — " + e.capability + " on " + e.object_type;
+  }
+
+  function renderExposure(sec, ex) {
+    if (!ex.measured) {
+      sec.appendChild(el("p", {text:
+        "Permission exposure was not measured this run (the permissions feed " +
+        "was unavailable — see the coverage panel). No exposure is asserted; " +
+        "absence of measurement is not a clean bill."}));
+      return;
+    }
+    sec.appendChild(el("p", {}, [txt(
+      num(ex.count) + " grant(s) hand a sensitive capability to an " +
+      "everyone-group: broad access where the model should be scoped.")]));
+
+    var bad = ex.bad_examples || [];
+    var good = ex.good_examples || [];
+    var det = el("details", {class: "expander"});
+    det.appendChild(el("summary", {}, [txt(
+      "Examples for the interview (" + num(bad.length) + " broad, " +
+      num(good.length) + " scoped)")]));
+    var body = el("div", {class: "expander-body"});
+    if (bad.length) {
+      body.appendChild(el("p", {}, [el("strong", {text:
+        "Broad and powerful — who can change or delete widely?"})]));
+      var bl = el("ul");
+      bad.forEach(function (e) { bl.appendChild(el("li", {text: grantLine(e)})); });
+      body.appendChild(bl);
+    }
+    if (good.length) {
+      body.appendChild(el("p", {}, [el("strong", {text:
+        "Scoped to a named group — what good looks like"})]));
+      var gl = el("ul");
+      good.forEach(function (e) { gl.appendChild(el("li", {text: grantLine(e)})); });
+      body.appendChild(gl);
+    }
+    det.appendChild(body);
+    sec.appendChild(det);
   }
 
   // =====================================================================
@@ -453,8 +674,8 @@
         var body = el("div", {class: "expander-body"});
         if (f.finding) body.appendChild(el("p", {text: f.finding}));
         body.appendChild(el("p", {class: "baseline-note", text:
-          "dimension: " + (f.dimension || "?") + " · confidence: " +
-          (f.confidence || "?") + " · gates: " +
+          "dimension: " + (f.dimension || "?") +
+          " · confidence: " + (f.confidence || "?") + " · gates: " +
           ((f.gates || []).join(", ") || "—")}));
         var fl = (DATA.flags || []).filter(function (x) { return x.facet === f.id; });
         if (fl.length) body.appendChild(flagList(fl));
@@ -523,9 +744,10 @@
           "engagement — the tool does not synthesize them."}));
         var ol = el("ol");
         (DATA.domains || []).forEach(function (d) {
-          (d.binding_constraints || []).forEach(function (id) {
+          var names = d.binding_constraints || [];
+          names.forEach(function (name) {
             ol.appendChild(el("li", {text:
-              "Lift " + id + " to clear the " + d.id + " target (" +
+              "Lift " + name + " to clear the " + d.id + " target (" +
               stageLabel(d.target_stage) + ")."}));
           });
         });
@@ -568,10 +790,15 @@
       ol.appendChild(el("li", {text:
         "Move " + num(sx.user_context_field_count) + " access rule(s) out of the " +
         "visualization layer to the data source."}));
-    if (rt.zero_view_workbooks)
+    if (rt.usage_measured !== false && rt.zero_view_workbooks)
       ol.appendChild(el("li", {text:
         "Retire " + num(rt.zero_view_workbooks) + " zero-view workbook(s) and " +
         "consolidate redundant sources to recover capacity."}));
+    else if (rt.redundant_source_tables)
+      ol.appendChild(el("li", {text:
+        "Consolidate " + num(rt.redundant_source_tables) + " redundant upstream " +
+        "source table(s) to recover capacity. (View-based retirement is deferred " +
+        "until usage is measured.)"}));
     if (!ol.childNodes.length)
       ol.appendChild(el("li", {text: "No findings to act on."}));
     sec.appendChild(ol);
@@ -588,6 +815,7 @@
     var dm = (DATA.findings && DATA.findings.definition_multiplicity) || {};
     var s = (DATA.findings && DATA.findings.security_exposure) || {};
     var seeds = [
+      ["Multiply-defined metric concepts", dm.multiplicity_group_count],
       ["Contested metric concepts", dm.contested_group_count],
       ["Metric concepts in scope", (dm.groups || []).length],
       ["Zero-view workbooks", r.zero_view_workbooks],
@@ -723,8 +951,10 @@
   function flagList(flags) {
     var ul = el("ul");
     flags.forEach(function (fl) {
-      ul.appendChild(el("li", {}, [txt(fl.id + " "), severityChip(fl.severity),
-        txt(" count " + num(fl.count))]));
+      var li = el("li", {}, [
+        el("strong", {text: fl.id + " "}),
+        severityChip(fl.severity), txt(" count " + num(fl.count))]);
+      ul.appendChild(li);
     });
     return ul;
   }
@@ -830,6 +1060,7 @@
     renderDefinitions();
     renderSecurity();
     renderRetirement();
+    renderGovernancePosture();
     renderDimensions();
     renderRegister();
     renderRemediation();

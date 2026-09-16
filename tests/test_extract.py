@@ -49,13 +49,14 @@ def test_coverage_records_every_attempted_measure():
 
     cov = {r["measure"]: r["status"] for r in store.coverage("r")}
     # Attempted measures succeeded -- including the R2 dimensions (permissions,
-    # refresh_jobs, custom_sql) and adoption_depth (usage events carry a user).
+    # refresh_jobs, custom_sql), the global Metadata shards database_tables /
+    # data_quality_warnings, and adoption_depth (usage events carry a user).
     for m in ("projects", "datasources", "workbooks", "fields", "usage_events",
-              "permissions", "refresh_jobs", "custom_sql", "adoption_depth"):
+              "permissions", "refresh_jobs", "custom_sql", "adoption_depth",
+              "database_tables", "data_quality_warnings", "column_lineage"):
         assert cov.get(m) == "ok", "measure %s not ok: %r" % (m, cov.get(m))
     # Still-deferred measures are recorded as skipped -- never absent, never clean.
-    for m in ("database_tables", "data_quality_warnings", "query_execution",
-              "adoption_trajectory"):
+    for m in ("query_execution", "adoption_trajectory"):
         assert cov.get(m) == "skipped", "measure %s should be skipped" % m
 
 
@@ -104,6 +105,32 @@ def test_r2_tables_match_manifest(profile):
                   "WHERE run_id='r' AND user_id IS NOT NULL") == ad["events_with_user"]
     assert scalar("SELECT COUNT(DISTINCT user_id) FROM usage_events "
                   "WHERE run_id='r' AND user_id IS NOT NULL") == ad["distinct_users"]
+
+    # Root-table column projection (DF-08): one row per (source, physical table,
+    # column) a ColumnField maps onto, from ColumnField.upstreamColumns. The
+    # loader records it; the fixture ground truth counts the same rows.
+    tcp = man["table_column_projection"]
+    assert store.count("table_column_projection", "r") == tcp["rows"]
+
+    # Database tables -> grain (DF-07 companion): count plus the derived signals
+    # (embedded / certified / the largest physical-table fan-out).
+    dt = man["database_tables"]
+    assert store.count("database_tables", "r") == dt["count"]
+    assert scalar("SELECT COALESCE(SUM(is_embedded),0) FROM database_tables "
+                  "WHERE run_id='r'") == dt["embedded"]
+    assert scalar("SELECT COALESCE(SUM(is_certified),0) FROM database_tables "
+                  "WHERE run_id='r'") == dt["certified"]
+    assert scalar("SELECT COALESCE(MAX(downstream_datasource_count),0) FROM "
+                  "database_tables WHERE run_id='r'") == dt["max_downstream"]
+
+    # Data-quality warnings (GOV-03, freshness context): count plus the active
+    # and severe splits that governance divergence keys off.
+    dq = man["data_quality_warnings"]
+    assert store.count("data_quality_warnings", "r") == dq["count"]
+    assert scalar("SELECT COALESCE(SUM(is_active),0) FROM data_quality_warnings "
+                  "WHERE run_id='r'") == dq["active"]
+    assert scalar("SELECT COALESCE(SUM(is_severe),0) FROM data_quality_warnings "
+                  "WHERE run_id='r'") == dq["severe"]
 
 
 def test_custom_sql_grain_signals_are_derived_not_leaked():
@@ -200,3 +227,50 @@ def test_rerun_is_idempotent():
     ExtractRunner(FixtureClient.from_path(estate_path), store, "r").run()
     assert store.count("workbooks", "r") == counts["workbooks"]
     assert store.count("datasources", "r") == counts["datasources"]
+
+
+# -- coverage honesty on failure ------------------------------------------------
+# A query the live site's Metadata API schema does not support must degrade to
+# an honest "unavailable" (with the reason), NOT "failed" and NOT silently
+# clean. A failure for any other reason stays "failed". This is coverage-first-
+# class (plan invariant 7): an unmeasured dimension never reads as clean, and
+# the register distinguishes "your site can't provide this" from "it broke".
+# Regression guard for the real live scan finding (projectsConnection / a
+# CalculatedField field absent from the site schema).
+
+def _coverage_runner():
+    store = Store.open(":memory:")
+    return ExtractRunner(client=None, store=store, run_id="r"), store
+
+
+def test_schema_incompatible_query_is_unavailable_not_failed():
+    from estate_scan.extract.shards import global_shard
+    runner, store = _coverage_runner()
+    shard = global_shard("projects", {"page_size": 100})
+    shard.status = "failed"
+    runner._shard_errors[shard.shard_key] = (
+        "Validation error (FieldUndefined@[projectsConnection]) : Field "
+        "'projectsConnection' in type 'Query' is undefined")
+    runner._record_measure("projects", shard, ok=False)
+
+    row = {r["measure"]: (r["status"], r["reason"])
+           for r in store.coverage("r")}["projects"]
+    status, reason = row
+    assert status == "unavailable"          # honest: not clean, not "failed"
+    assert "Metadata API schema" in reason
+    assert "projectsConnection" in reason   # the real cause is surfaced
+
+
+def test_non_schema_failure_stays_failed():
+    from estate_scan.extract.shards import global_shard
+    runner, store = _coverage_runner()
+    shard = global_shard("workbooks", {"page_size": 100})
+    shard.status = "failed"
+    runner._shard_errors[shard.shard_key] = "SESSION_EXPIRED"
+    runner._record_measure("workbooks", shard, ok=False)
+
+    row = {r["measure"]: (r["status"], r["reason"])
+           for r in store.coverage("r")}["workbooks"]
+    status, reason = row
+    assert status == "failed"               # a transient/other failure, not schema
+    assert "SESSION_EXPIRED" in reason

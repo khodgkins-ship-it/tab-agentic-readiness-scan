@@ -54,6 +54,8 @@ _OWNER_QUERIES = {
     "workbooks": "workbooksConnection",
     "published_datasources": "publishedDatasourcesConnection",
 }
+# Tableau REST list page size for the permissions object sampler (max 1000).
+_REST_PAGE_SIZE = 100
 
 
 class LiveClient(EstateClient):
@@ -164,6 +166,12 @@ class LiveClient(EstateClient):
     # -- REST (Gate B) -------------------------------------------------------
     def rest(self, resource, params=None):
         # type: (str, Optional[dict]) -> RestResult
+        if resource == "permissions":
+            # Tableau has no bulk permissions endpoint -- grants are read one
+            # object at a time. Sample per object through the GET-only per-object
+            # permission specs (Gate B) and return the flat grant list the
+            # loader expects, plus the sampling basis in `raw`.
+            return self._collect_permissions()
         if not rest_resources.is_registered(resource):
             # usage_events and other later-milestone sources are not wired to a
             # live endpoint in R1 (their sources are VDS/repository, R2/R3). Fail
@@ -188,6 +196,113 @@ class LiveClient(EstateClient):
         items, total = _parse_rest_list(body, spec.item_key)
         return RestResult(resp.status_code, items=items, total_available=total,
                           has_more=False, raw=body)
+
+    # -- permissions sampler (SEC-02 / governance) ---------------------------
+    #: Content object types sampled for permissions (project-level is always
+    #: taken in full and handled separately).
+    _CONTENT_TYPES = (("datasource", "datasources"), ("workbook", "workbooks"))
+
+    def _collect_permissions(self):
+        # type: () -> RestResult
+        """Read per-object permission grants: project-level in full, content-level
+        sampled up to `permissions_sample` per object type. Flattens each object's
+        nested `granteeCapabilities` into the flat grant rows `load_permissions`
+        stores, and records the sampling basis in `raw` so coverage can surface it.
+        """
+        self._maybe_refresh()
+        try:
+            sample = int(self._config.get("permissions_sample", 50))
+        except (TypeError, ValueError):
+            sample = 50
+        if sample < 0:
+            sample = 0
+
+        grants = []  # type: List[dict]
+        # Project-level grants in full -- the governance backbone. If projects
+        # cannot even be listed, the permissions picture is unestablished: fail
+        # honestly rather than return a clean-looking empty result.
+        projects, ptotal, pstatus = self._list_objects("projects")
+        if pstatus != 200:
+            return RestResult(pstatus, items=[],
+                              raw={"error": "could not list projects for "
+                                            "permissions (HTTP %s)" % pstatus})
+        for obj in projects:
+            grants.extend(self._object_grants("project", obj.get("id"), sampled=0))
+        basis = {"projects": {"total": ptotal, "read": len(projects),
+                              "coverage": "all"}}
+
+        # Content-level grants, sampled up to `permissions_sample` per type.
+        for otype, resource in self._CONTENT_TYPES:
+            listed, total, status = self._list_objects(resource, cap=sample)
+            if status != 200:
+                basis[resource] = {"total": None, "sampled": 0,
+                                   "coverage": "unavailable(HTTP %s)" % status}
+                continue
+            chosen = listed[:sample] if sample else []
+            for obj in chosen:
+                grants.extend(self._object_grants(otype, obj.get("id"), sampled=1))
+            basis[resource] = {
+                "total": total, "sampled": len(chosen),
+                "coverage": "all" if len(chosen) >= total else "sampled"}
+
+        return RestResult(200, items=grants, total_available=len(grants),
+                          has_more=False,
+                          raw={"resource": "permissions",
+                               "sampling_basis": basis,
+                               "sampling_basis_text": _basis_text(basis)})
+
+    def _list_objects(self, resource, cap=None):
+        # type: (str, Optional[int]) -> tuple
+        """Page through a registered GET content endpoint, returning
+        (items, total_available, status). Stops early once `cap` items are in
+        hand -- the content sampler needs only a prefix."""
+        spec = rest_resources.get(resource)  # Gate B: GET-only registry
+        items = []  # type: List[dict]
+        total = 0
+        page = 1
+        while True:
+            self._maybe_refresh()
+            path = spec.path.format(version=self._api_version, site_id=self.site_id)
+            res = self._rest_get(spec, path,
+                                 {"pageNumber": page, "pageSize": _REST_PAGE_SIZE})
+            if not res.ok:
+                return items, total, res.status
+            total = res.total_available or total
+            items.extend(res.items)
+            if not res.items or len(items) >= (total or len(items)):
+                break
+            if cap is not None and len(items) >= cap:
+                break
+            page += 1
+        return items, (total or len(items)), 200
+
+    def _object_grants(self, object_type, object_id, sampled):
+        # type: (str, Optional[str], int) -> list
+        """Read one object's permissions and flatten `granteeCapabilities` into
+        flat grant rows. A per-object read that fails is skipped, not fatal: the
+        sampler is best-effort and the basis records what was covered."""
+        if not object_id:
+            return []
+        spec = rest_resources.permission_resource(object_type)
+        self._maybe_refresh()
+        path = spec.path.format(version=self._api_version, site_id=self.site_id,
+                                object_id=object_id)
+        res = self._rest_get(spec, path, None)
+        if not res.ok:
+            return []
+        out = []
+        for gc in res.items:
+            gtype, gid = _grantee(gc)
+            if gtype is None:
+                continue
+            caps = ((gc.get("capabilities") or {}).get("capability")) or []
+            for cap in caps:
+                out.append({
+                    "object_type": object_type, "object_id": object_id,
+                    "grantee_type": gtype, "grantee_id": gid,
+                    "capability": cap.get("name"), "mode": cap.get("mode"),
+                    "sampled": sampled})
+        return out
 
     # -- VizQL Data Service (Gate C) -----------------------------------------
     def vds_query(self, body):
@@ -348,6 +463,37 @@ def _safe_json(resp):
         return resp.json()
     except ValueError:
         return {"error": "non-JSON response (HTTP %d)" % resp.status_code}
+
+
+def _grantee(gc):
+    # type: (object) -> tuple
+    """Read (grantee_type, grantee_id) from one granteeCapability node. Tableau
+    keys the grantee under `group` or `user`; anything else is skipped."""
+    if not isinstance(gc, dict):
+        return None, None
+    if isinstance(gc.get("group"), dict):
+        return "group", gc["group"].get("id")
+    if isinstance(gc.get("user"), dict):
+        return "user", gc["user"].get("id")
+    return None, None
+
+
+def _basis_text(basis):
+    # type: (dict) -> str
+    """Human-readable sampling basis, e.g.
+    "10 projects (all); 0 of 200 datasources sampled; 50 of 1000 workbooks all"."""
+    parts = []
+    pj = basis.get("projects") or {}
+    parts.append("%s projects (all)" % pj.get("read", 0))
+    for key in ("datasources", "workbooks"):
+        b = basis.get(key) or {}
+        cov = b.get("coverage", "")
+        if cov.startswith("unavailable"):
+            parts.append("%s %s" % (key, cov))
+        else:
+            parts.append("%s of %s %s (%s)"
+                         % (b.get("sampled", 0), b.get("total", 0), key, cov))
+    return "; ".join(parts)
 
 
 def _classify_vds(status, body):

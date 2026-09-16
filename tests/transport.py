@@ -39,6 +39,19 @@ _OP_NAME = re.compile(r"\b(?:query|mutation|subscription)\s+([A-Za-z_]\w*)")
 # production client just for a string.
 _VDS_QUERY_PATH = "/api/v1/vizql-data-service/query-datasource"
 
+# REST content-list and per-object permission routes the permissions sampler
+# (live._collect_permissions) exercises. `_LIST_KEYS` maps the URL plural to the
+# (estate key, singular item_key); the singular doubles as the flat-grant
+# `object_type`, so it drives both the list and the permissions reconstruction.
+_LIST_KEYS = {
+    "projects": ("projects", "project"),
+    "datasources": ("datasources", "datasource"),
+    "workbooks": ("workbooks", "workbook"),
+}
+_LIST_RE = re.compile(r"/sites/[^/]+/(projects|datasources|workbooks)$")
+_PERM_RE = re.compile(
+    r"/sites/[^/]+/(projects|datasources|workbooks)/([^/]+)/permissions$")
+
 
 def _op_name(query_text):
     # type: (str) -> str
@@ -68,6 +81,10 @@ class FixtureTransport(object):
       * ``rest_status``       -- status for REST probe GETs (default 403, so the
                                  live capability probe reports rest_jobs/rest_tasks
                                  False even though the fixture client serves them).
+      * ``list_status``       -- status for the content-list / per-object
+                                 permission GETs (default 200; non-200 simulates
+                                 a site that refuses to list objects, so the
+                                 permissions sampler fails honestly).
       * ``vds_available``     -- True makes the VDS capability probe (a GET to the
                                  POST-only query-datasource endpoint) answer 405
                                  (service present); False answers 404 (absent).
@@ -78,9 +95,10 @@ class FixtureTransport(object):
 
     def __init__(self, estate, api_version="3.24", partial_over=None,
                  signin_status=200, metadata_available=True,
-                 graphql_status=200, rest_status=403,
+                 graphql_status=200, rest_status=403, list_status=200,
                  vds_available=False, vds_values=None):
         self._fc = FixtureClient(estate, partial_over=partial_over)
+        self._estate = estate
         meta = estate.get("meta", {})
         site = meta.get("site", {})
         self.site_id = site.get("luid") or "site-fixture"
@@ -92,6 +110,7 @@ class FixtureTransport(object):
         self.metadata_available = metadata_available
         self.graphql_status = graphql_status
         self.rest_status = rest_status
+        self.list_status = list_status
         self.vds_available = vds_available
         self._vds_values = vds_values or {}
         self._signin_count = 0
@@ -123,10 +142,63 @@ class FixtureTransport(object):
             if method == "POST":
                 return self._vds(request)
         if method == "GET":
+            m = _PERM_RE.search(path)
+            if m:
+                if self.list_status != 200:
+                    return httpx.Response(self.list_status,
+                                          json={"error": "permissions refused"})
+                return self._permissions(m.group(1), m.group(2))
+            m = _LIST_RE.search(path)
+            if m:
+                if self.list_status != 200:
+                    return httpx.Response(self.list_status,
+                                          json={"error": "listing refused"})
+                return self._object_list(m.group(1))
+            # Everything else (the jobs/tasks capability probes) stays a plain
+            # probe failure so rest_jobs/rest_tasks report False, unchanged.
             return httpx.Response(
                 self.rest_status,
                 json={"error": {"summary": "probe not enabled in fixture"}})
         return httpx.Response(404, json={"error": "unrouted %s %s" % (method, path)})
+
+    # -- REST content lists + per-object permissions -------------------------
+    def _object_list(self, plural):
+        # type: (str) -> httpx.Response
+        estate_key, item_key = _LIST_KEYS[plural]
+        objs = self._estate.get(estate_key, []) or []
+        items = [{"id": o.get("id"), "name": o.get("name")} for o in objs]
+        return httpx.Response(200, json={
+            plural: {item_key: items},
+            "pagination": {"pageNumber": "1",
+                           "pageSize": str(len(items) or 1),
+                           "totalAvailable": str(len(items))}})
+
+    def _permissions(self, plural, object_id):
+        # type: (str, str) -> httpx.Response
+        """Reconstruct the nested Tableau permissions body for one object from
+        the fixture's flat grant rows -- grants for the object grouped by grantee
+        into granteeCapabilities. The live sampler flattens it straight back, so
+        the round-trip is exact (the flat grant PK guarantees uniqueness)."""
+        object_type = _LIST_KEYS[plural][1]
+        order = []    # type: list  # [(gtype, gid)] in first-seen order
+        by_grantee = {}
+        for g in self._estate.get("permissions", []) or []:
+            if g.get("object_type") != object_type or g.get("object_id") != object_id:
+                continue
+            gkey = (g.get("grantee_type"), g.get("grantee_id"))
+            if gkey not in by_grantee:
+                by_grantee[gkey] = []
+                order.append(gkey)
+            by_grantee[gkey].append(
+                {"name": g.get("capability"), "mode": g.get("mode")})
+        grantee_capabilities = []
+        for (gtype, gid) in order:
+            grantee_capabilities.append({
+                gtype: {"id": gid},
+                "capabilities": {"capability": by_grantee[(gtype, gid)]}})
+        return httpx.Response(200, json={"permissions": {
+            object_type: {"id": object_id},
+            "granteeCapabilities": grantee_capabilities}})
 
     # -- VizQL Data Service --------------------------------------------------
     def _vds(self, request):

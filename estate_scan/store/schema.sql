@@ -110,6 +110,62 @@ CREATE TABLE IF NOT EXISTS custom_sql (
     PRIMARY KEY (run_id, id)
 );
 
+CREATE TABLE IF NOT EXISTS database_tables (
+    run_id                      TEXT,
+    id                          TEXT,
+    luid                        TEXT,
+    name                        TEXT,
+    full_name                   TEXT,
+    schema_name                 TEXT,   -- `schema` in the API; renamed here
+    connection_type             TEXT,
+    is_embedded                 INTEGER,
+    is_certified                INTEGER,
+    column_count                INTEGER,   -- columnsConnection.totalCount (grain width)
+    downstream_datasource_count INTEGER,   -- fan-out from the physical table side
+    PRIMARY KEY (run_id, id)
+);
+
+-- Per-published-source projection of a physical table's columns (DF-08). One
+-- row per (published source, physical table, column) the source actually maps a
+-- field onto -- i.e. the column SET each source exposes from a shared root
+-- table. Where >=2 sources sit on the same physical table (DF-02 fan-out), the
+-- column-name sets and per-source field types can be compared to surface
+-- column-level sprawl / drift that the table-level fan-out cannot see. The
+-- projection rides on the per-source field shard (ColumnField.upstreamColumns),
+-- so it is only populated for column-backed fields; an all-calculated source
+-- contributes nothing and reads as unmeasured, never clean. `table_key` is the
+-- coalesced physical identity (fullName or luid or id) -- deliberately the SAME
+-- identity lineage.upstream_id uses, so DF-08 speaks DF-02's vocabulary. A
+-- source that maps two fields onto one physical column keeps the first (the
+-- column-set membership is what matters; INSERT OR IGNORE on the loader).
+CREATE TABLE IF NOT EXISTS table_column_projection (
+    run_id          TEXT,
+    datasource_id   TEXT,
+    table_key       TEXT,   -- physical identity: fullName or luid or id (== lineage.upstream_id)
+    table_fullname  TEXT,   -- human-readable physical name for evidence (may be null)
+    column_name     TEXT,
+    remote_type     TEXT,   -- physical column type (RemoteType; PDS-invariant)
+    field_data_type TEXT,   -- Tableau-side FieldDataType of the wrapping ColumnField (per-source)
+    field_role      TEXT,   -- dimension | measure of the wrapping field (per-source)
+    PRIMARY KEY (run_id, datasource_id, table_key, column_name)
+);
+
+CREATE TABLE IF NOT EXISTS data_quality_warnings (
+    run_id       TEXT,
+    id           TEXT,
+    luid         TEXT,
+    asset_luid   TEXT,   -- luid of the warned asset; joins datasources.luid (GOV-03)
+    asset_name   TEXT,
+    asset_type   TEXT,   -- __typename of the warned asset (PublishedDatasource, ...)
+    is_active    INTEGER,
+    is_severe    INTEGER,   -- deprecated upstream; kept for continuity
+    is_elevated  INTEGER,   -- the modern severity flag
+    warning_type TEXT,
+    category     TEXT,
+    message      TEXT,
+    PRIMARY KEY (run_id, id)
+);
+
 CREATE TABLE IF NOT EXISTS lineage (
     run_id          TEXT,
     downstream_type TEXT,
@@ -235,7 +291,10 @@ CREATE TABLE IF NOT EXISTS flags (
 CREATE TABLE IF NOT EXISTS coverage (
     run_id  TEXT,
     measure TEXT,
-    status  TEXT,     -- ok | partial | failed | skipped
+    status  TEXT,     -- ok | partial | failed | skipped | unavailable
+                      -- unavailable = the site's Metadata API schema does not
+                      -- offer this query's field/type (honest: not clean, not
+                      -- a transient failure). See runner._classify_failure.
     reason  TEXT,
     PRIMARY KEY (run_id, measure)
 );

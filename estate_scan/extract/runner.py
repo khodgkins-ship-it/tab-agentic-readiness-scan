@@ -28,6 +28,8 @@ _CONN_KEY = {
     "published_datasources": "publishedDatasourcesConnection",
     "workbooks": "workbooksConnection",
     "custom_sql": "customSQLTablesConnection",
+    "database_tables": "databaseTablesConnection",
+    "data_quality_warnings": "dataQualityWarningsConnection",
 }
 
 # query name -> coverage measure name
@@ -37,21 +39,24 @@ _MEASURE = {
     "workbooks": "workbooks",
     "datasource_fields": "fields",
     "custom_sql": "custom_sql",
+    "database_tables": "database_tables",
+    "data_quality_warnings": "data_quality_warnings",
 }
 
 # Global object-level shards, in the dependency order the spec mandates.
-# custom_sql is a global GraphQL shard (Metadata API), so it rides the same
-# object-shard loop as projects/datasources/workbooks -- appended last so a
-# resume mid-run through the earlier shards is unchanged.
-_GLOBAL_ORDER = ["projects", "published_datasources", "workbooks", "custom_sql"]
+# custom_sql, database_tables and data_quality_warnings are global GraphQL
+# shards (Metadata API), so they ride the same object-shard loop as
+# projects/datasources/workbooks -- appended last, in the order they graduated,
+# so a resume mid-run through the earlier shards is unchanged.
+_GLOBAL_ORDER = ["projects", "published_datasources", "workbooks", "custom_sql",
+                 "database_tables", "data_quality_warnings"]
 
 # Measures deferred out of the prototype. Recorded as skipped so the report
 # renders them as unmeasured -- never as clean (coverage is first-class).
-# permissions / refresh_jobs / custom_sql graduated to measured in R2; the rest
-# stay deferred until their own milestones.
+# permissions / refresh_jobs / custom_sql (R2) and database_tables /
+# data_quality_warnings graduated to measured; the rest stay deferred until
+# their own milestones.
 _DEFERRED_MEASURES = [
-    ("database_tables", "deferred: database table/column extraction out of scope"),
-    ("data_quality_warnings", "deferred: DQW extraction out of prototype scope"),
     ("query_execution", "full mode only; scan mode never executes queries"),
     ("adoption_trajectory", "retention < 90d; sourced from account records, not the scan"),
 ]
@@ -78,6 +83,10 @@ class ExtractRunner(object):
         self.subdivision_events = []  # type: List[tuple]
         self._manifest = queries.load_manifest()
         self._capabilities = {}     # type: dict  # set from detect_capabilities()
+        # shard_key -> the fatal error string, so coverage can distinguish a
+        # query the site's schema does not support (unavailable) from a query
+        # that failed for another reason (failed). Populated in _run_shard.
+        self._shard_errors = {}     # type: dict
 
     # -- logging -------------------------------------------------------------
     def _log(self, msg):
@@ -159,6 +168,9 @@ class ExtractRunner(object):
         if not results:
             self.store.record_coverage(self.run_id, "fields", "failed",
                                        "no data sources to extract fields from")
+            self.store.record_coverage(
+                self.run_id, "column_lineage", "skipped",
+                "no data sources to project columns from")
             return
         failed = results.count(False)
         if failed == 0:
@@ -171,6 +183,27 @@ class ExtractRunner(object):
         else:
             self.store.record_coverage(self.run_id, "fields", "failed",
                                        "all %d field shards failed" % len(results))
+
+        # Column lineage (DF-08) rides on the field shards: ColumnField.
+        # upstreamColumns yields the per-source column projection of each root
+        # table. It is measurable only when some column-backed field actually
+        # carried upstream columns -- an all-calculated estate, or a backend
+        # not exposing upstreamColumns, captures none, which must read as
+        # unmeasured, never as a clean 'no divergence'.
+        proj = self.store.table_column_projection_count(self.run_id)
+        if failed == len(results):
+            self.store.record_coverage(
+                self.run_id, "column_lineage", "skipped",
+                "no field shards succeeded; no column projections captured")
+        elif proj > 0:
+            self.store.record_coverage(
+                self.run_id, "column_lineage", "ok",
+                "%d column projections captured" % proj)
+        else:
+            self.store.record_coverage(
+                self.run_id, "column_lineage", "skipped",
+                "no upstream columns captured (no column-backed fields, or "
+                "upstreamColumns unavailable on this backend)")
 
     # -- usage events --------------------------------------------------------
     def _run_usage_events(self):
@@ -252,8 +285,15 @@ class ExtractRunner(object):
             return
         self.store.load_permissions(self.run_id, res.items)
         self.store.commit()
-        self.store.record_coverage(self.run_id, "permissions", "ok",
-                                   "%d permission grants" % len(res.items))
+        # Surface the sampling basis in the coverage register when the client
+        # sampled per object (the live path); the fixture path serves the whole
+        # set at once and carries no basis, so its reason is just the count.
+        reason = "%d permission grants" % len(res.items)
+        basis_text = (res.raw or {}).get("sampling_basis_text") \
+            if isinstance(res.raw, dict) else None
+        if basis_text:
+            reason += " (%s)" % basis_text
+        self.store.record_coverage(self.run_id, "permissions", "ok", reason)
         self._log("permissions: loaded %d grants" % len(res.items))
 
     # -- client-discovered coverage -----------------------------------------
@@ -298,6 +338,7 @@ class ExtractRunner(object):
 
             if not res.ok:
                 shard.status = "failed"
+                self._shard_errors[shard.shard_key] = res.error or ""
                 self._persist(shard)
                 self.store.commit()
                 self._log("shard %s FAILED: %s" % (shard.shard_key, res.error))
@@ -307,6 +348,9 @@ class ExtractRunner(object):
                 # Never accept truncated data. Subdivide and retry same cursor.
                 if not shard.can_subdivide():
                     shard.status = "failed"
+                    self._shard_errors[shard.shard_key] = (
+                        "partial at minimum page size (single node exceeds "
+                        "node limit)")
                     self._persist(shard)
                     self.store.commit()
                     self._log("shard %s FAILED: partial at minimum page size "
@@ -369,15 +413,50 @@ class ExtractRunner(object):
             self.store.load_fields(self.run_id, shard.scope_id, nodes)
         elif q == "custom_sql":
             self.store.load_custom_sql(self.run_id, nodes)
+        elif q == "database_tables":
+            self.store.load_database_tables(self.run_id, nodes)
+        elif q == "data_quality_warnings":
+            self.store.load_data_quality_warnings(self.run_id, nodes)
         else:
             raise ValueError("no loader for query %r" % q)
 
     # -- coverage ------------------------------------------------------------
+    # Markers in a GraphQL error message that mean the site's Metadata API
+    # schema does not offer the field/type this query selects -- i.e. the
+    # measure is *unavailable on this deployment*, not a transient failure.
+    # Recording it as "unavailable" (with the reason) rather than "failed"
+    # keeps coverage honest: an unmeasured dimension still never reads as clean,
+    # but the register distinguishes "your site can't provide this" from
+    # "something broke". Kept general so any query that outruns a site's schema
+    # degrades the same way, not just projects.
+    _SCHEMA_INCOMPAT_MARKERS = (
+        "is undefined",            # graphql-java FieldUndefined / WrongType
+        "FieldUndefined",
+        "Cannot query field",      # graphql-js phrasing
+        "Unknown field",
+        "Unknown type",
+    )
+
+    def _classify_failure(self, shard):
+        # type: (Shard) -> tuple
+        """Return (status, reason) for a shard that did not complete."""
+        err = (self._shard_errors.get(shard.shard_key) or "").strip()
+        if err and any(m in err for m in self._SCHEMA_INCOMPAT_MARKERS):
+            # Schema validation errors carry no secrets (they name schema
+            # types/fields), so surfacing the message is safe and useful.
+            return ("unavailable",
+                    "not supported by this site's Metadata API schema: %s"
+                    % err)
+        if err:
+            return ("failed", "shard %s did not complete: %s"
+                    % (shard.shard_key, err))
+        return ("failed", "shard %s did not complete" % shard.shard_key)
+
     def _record_measure(self, measure, shard, ok):
         # type: (str, Shard, bool) -> None
         if ok:
             self.store.record_coverage(self.run_id, measure, "ok",
                                        "%d nodes" % shard.node_count)
         else:
-            self.store.record_coverage(self.run_id, measure, "failed",
-                                       "shard %s did not complete" % shard.shard_key)
+            status, reason = self._classify_failure(shard)
+            self.store.record_coverage(self.run_id, measure, status, reason)

@@ -253,6 +253,32 @@ GROUP_BUILDERS = {
 # Field / datasource / workbook construction helpers.
 # ---------------------------------------------------------------------------
 
+def _remote_type(name):
+    # type: (str) -> str
+    """Physical (RemoteType) code for a column, derived from its NAME so it is
+    identical across every source that maps the column -- physical types are
+    PDS-invariant. This is evidence only; DF-08's divergence signal is the
+    wrapping field's own dataType (which a source CAN set inconsistently), not
+    this. Kept deliberately coarse."""
+    return "R8" if name in ("Sales", "Amount", "Cost") else "WSTR"
+
+
+def _force_field_data_type(ds, col_name, data_type):
+    # type: (dict, str, str) -> None
+    """Set the dataType of a source's ColumnField `col_name`. Used to inject a
+    single root-table column TYPE divergence for DF-08: one source on a shared
+    physical table models a shared column with a different Tableau field type
+    than its peers. Raises if the column is absent so the injection can never
+    silently no-op."""
+    for f in ds["fields"]:
+        if f.get("__typename") == "ColumnField" and f.get("name") == col_name:
+            f["dataType"] = data_type
+            return
+    raise AssertionError(
+        "column %r not found on %r for DF-08 type-divergence injection"
+        % (col_name, ds.get("name")))
+
+
 def _mk_column(ids, name, described):
     # type: (_Ids, str, bool) -> dict
     return {
@@ -390,6 +416,15 @@ def _build_median(seed):
         datasources.append(_mk_datasource(
             ids, "Sales Extract %02d" % i, "Sales", rng, rich=False,
             upstream_tables=[shared_tbl]))
+
+    # -- DF-08: exactly one of the 12 Sales Extracts models the shared table's
+    # "Region" column with a divergent Tableau field type (INTEGER, vs STRING
+    # on the other 11) -- root-table column TYPE divergence on
+    # warehouse.public.fact_sales: the column-level sprawl the table-level
+    # fan-out (DF-02) cannot see. A pure SUBSET projection would NOT fire; a
+    # conflicting TYPE on a shared column does. Changes one dataType only (no
+    # rng, no id mint), so the byte-for-byte base fixture is otherwise intact.
+    _force_field_data_type(datasources[0], "Region", "INTEGER")
 
     # -- DF-03: published-on-published chain, depth 2 (C on B on A).
     ds_a = _mk_datasource(ids, "Base Warehouse DS", "Data Eng", rng, rich=False)
@@ -828,6 +863,100 @@ def _enrich_r2(estate, seed):
             "sampled": 1})
     estate["permissions"] = permissions
 
+    # -- database_tables: the physical tables behind the published sources --
+    # Deduped across every source's upstreamTables in first-seen order, with the
+    # real downstream fan-out counted from the estate (the DF-07 consolidation
+    # signal from the physical side). Column count / embedded / certified /
+    # connection type are derived deterministically from position, so this adds
+    # no rng draw and leaves the byte-for-byte fixtures above unchanged.
+    conn_types = ["snowflake", "redshift", "postgres", "bigquery", "sqlserver"]
+    seen = {}     # type: Dict[str, dict]
+    order = []    # type: List[str]
+    fanout = {}   # type: Dict[str, int]
+    for ds in datasources:
+        for t in ds.get("upstreamTables", []):
+            key = t.get("id") or t.get("fullName") or t.get("name")
+            if key is None:
+                continue
+            fanout[key] = fanout.get(key, 0) + 1
+            if key not in seen:
+                seen[key] = t
+                order.append(key)
+    database_tables = []  # type: List[dict]
+    for i, key in enumerate(order):
+        t = seen[key]
+        tid = t.get("id") or ("dbtbl_%04d" % (i + 1))
+        database_tables.append({
+            "id": tid,
+            "luid": tid,
+            "name": t.get("name"),
+            "fullName": t.get("fullName"),
+            "schema": t.get("schema"),
+            "connectionType": conn_types[i % len(conn_types)],
+            "isEmbedded": (i % 5 == 0),
+            "isCertified": (i % 4 == 0),
+            "columnCount": 8 + (i * 7) % 40,
+            "downstreamDatasourceCount": fanout[key],
+        })
+    estate["database_tables"] = database_tables
+
+    # -- upstreamColumns: per-column physical projection (DF-08) -------------
+    # Every ColumnField maps onto a physical column of the SAME name on its
+    # source's first upstream table. remoteType is the physical type (name-
+    # derived, so identical across every source on the table -- PDS-invariant);
+    # the field's own dataType (already on the field node) is the per-source
+    # value DF-08 compares for TYPE divergence. Pure derivation over the built
+    # estate -- no rng, no id mint -- so the byte-for-byte fixtures are
+    # unchanged. Sources with no upstream table (DF-04 orphans) get nothing and
+    # read as unmeasured, never clean. Calculated fields get nothing (they have
+    # no physical column), matching the loader's no-op for them.
+    for ds in datasources:
+        up = ds.get("upstreamTables") or []
+        if not up:
+            continue
+        t0 = up[0]
+        tref = {"id": t0.get("id"), "name": t0.get("name"),
+                "luid": t0.get("luid"), "fullName": t0.get("fullName")}
+        for f in ds.get("fields", []):
+            if f.get("__typename") != "ColumnField":
+                continue
+            f["upstreamColumns"] = [{
+                "name": f["name"],
+                "remoteType": _remote_type(f["name"]),
+                "table": tref,
+            }]
+
+    # -- data_quality_warnings: raised against published sources ------------
+    # GOV-03 (certification/DQW divergence): a certified source carrying an
+    # ACTIVE warning is the divergence signal. Selection and severity are
+    # index-derived (no rng); the first certified source is forced to carry an
+    # active, elevated warning so the divergence case is always present.
+    warn_types = ["STALE", "MAINTENANCE", "DEPRECATED", "SENSITIVE_DATA"]
+    warn_idx = [i for i in range(len(datasources)) if i % 6 == 0]
+    first_certified = next((i for i, d in enumerate(datasources)
+                            if d.get("isCertified")), None)
+    if first_certified is not None and first_certified not in warn_idx:
+        warn_idx.append(first_certified)
+    warn_idx = sorted(set(warn_idx))
+    dqws = []  # type: List[dict]
+    for n, i in enumerate(warn_idx):
+        ds = datasources[i]
+        forced = (i == first_certified)
+        active = forced or (i % 12 != 6)
+        dqws.append({
+            "id": "dqw_%04d" % (n + 1),
+            "luid": "dqwlu_%04d" % (n + 1),
+            "isActive": active,
+            "isSevere": (i % 24 == 0),
+            "isElevated": forced or (i % 12 == 0),
+            "warningType": warn_types[n % len(warn_types)],
+            "category": "DATA_QUALITY_WARNING",
+            "message": "Automated data-quality check flagged this source.",
+            "asset": {"luid": ds.get("luid"), "name": ds.get("name"),
+                      "__typename": "PublishedDatasource"},
+        })
+    estate["data_quality_warnings"] = dqws
+
 
 def measure(estate):
     # type: (dict) -> dict
@@ -966,6 +1095,44 @@ def measure(estate):
                 break
     df05_count = len(df05_sources)
 
+    # DF-08: root-table column divergence. Mirror the loader's projection
+    # (table_key = fullName|luid|id; one row per source+table+column, first
+    # field wins on a repeated column) and the evaluator's TYPE-divergence test
+    # (a physical column >=2 sources on the same table model with different
+    # field data types). Name-set divergence is computed but gated OFF by
+    # default (flag_name_divergence=false), so it does not count toward firing.
+    proj = {}          # (ds_id, table_key) -> {column_name: field_data_type}
+    proj_rows = 0
+    for ds in dss:
+        for f in ds["fields"]:
+            if f.get("__typename") != "ColumnField":
+                continue
+            for c in f.get("upstreamColumns") or []:
+                t = c.get("table") or {}
+                tkey = t.get("fullName") or t.get("luid") or t.get("id")
+                cname = c.get("name")
+                if not tkey or not cname:
+                    continue
+                bucket = proj.setdefault((ds["id"], tkey), {})
+                if cname in bucket:
+                    continue                      # INSERT OR IGNORE: first wins
+                bucket[cname] = f.get("dataType")
+                proj_rows += 1
+    tbl_types = {}     # table_key -> {column_name: set(field_data_type)}
+    tbl_sources = {}   # table_key -> set(ds_id)
+    for (ds_id, tkey), cols in proj.items():
+        tbl_sources.setdefault(tkey, set()).add(ds_id)
+        cmap = tbl_types.setdefault(tkey, {})
+        for cname, dtype in cols.items():
+            s = cmap.setdefault(cname, set())
+            if dtype is not None:                 # evaluator skips null types
+                s.add(dtype)
+    df08_shared = {tk for tk, srcs in tbl_sources.items() if len(srcs) >= 2}
+    df08_type_divergent = sum(
+        1 for tk in df08_shared
+        for types in tbl_types[tk].values() if len(types) >= 2)
+    df08_count = df08_type_divergent   # name divergence gated off by default
+
     manifest = {
         "profile": estate["meta"]["profile"],
         "seed": estate["meta"]["seed"],
@@ -1033,6 +1200,41 @@ def measure(estate):
                                 if u.get("user_id")),
         "distinct_users": len(usage_users),
     }
+    dt = estate.get("database_tables", [])
+    dqw = estate.get("data_quality_warnings", [])
+    manifest["database_tables"] = {
+        "count": len(dt),
+        "embedded": sum(1 for t in dt if t.get("isEmbedded")),
+        "certified": sum(1 for t in dt if t.get("isCertified")),
+        "max_downstream": max((t.get("downstreamDatasourceCount", 0)
+                               for t in dt), default=0),
+    }
+    manifest["data_quality_warnings"] = {
+        "count": len(dqw),
+        "active": sum(1 for w in dqw if w.get("isActive")),
+        "severe": sum(1 for w in dqw if w.get("isSevere")),
+    }
+
+    # GOV-03: certified sources carrying an ACTIVE data-quality warning
+    # (certification / DQW divergence). Mirror store.certified_sources_with_
+    # active_warning EXACTLY: join the warning's asset luid to the source luid,
+    # keep active warnings on certified sources, count distinct sources. The
+    # first certified source is forced to carry an active warning in _enrich_r2,
+    # so this fires wherever a certified source exists.
+    ds_by_luid = {d.get("luid"): d for d in dss if d.get("luid")}
+    gov03_sources = set()
+    for w in dqw:
+        if not w.get("isActive"):
+            continue
+        d = ds_by_luid.get((w.get("asset") or {}).get("luid"))
+        if d is not None and d.get("isCertified"):
+            gov03_sources.add(d["id"])
+    gov03_count = len(gov03_sources)
+    manifest["table_column_projection"] = {
+        "rows": proj_rows,
+        "shared_tables": len(df08_shared),
+        "type_divergent_columns": df08_type_divergent,
+    }
 
     # Expected flag firing for the prototype flag set (M5 asserts against this).
     fe = manifest["flags_expected"]
@@ -1061,6 +1263,12 @@ def measure(estate):
     fe["DF-06"] = {"fires": (rj_failed / rj_total) > 0.10 if rj_total else False,
                    "count": rj_failed}
     fe["GOV-01"] = {"fires": missing_owner > 0, "count": missing_owner}
+    fe["DF-08"] = {"fires": df08_count >= 1, "count": df08_count}
+    # GOV-02 fires only on a measured feed with zero warnings. Every fixture
+    # serves the DQW feed (coverage `ok`), so firing reduces to "no warnings" --
+    # and every fixture carries at least one warning, so it is honestly silent.
+    fe["GOV-02"] = {"fires": len(dqw) == 0, "count": len(dqw)}
+    fe["GOV-03"] = {"fires": gov03_count >= 1, "count": gov03_count}
     return manifest
 
 
@@ -1122,13 +1330,31 @@ def _assert_profile(profile, estate, m):
                     names.add(f["name"])
         for want in ["Revenue", "Total Revenue", "Net Rev", "Rev USD"]:
             assert want in names, ("missing revenue variant name %r" % want)
+        # DF-08: exactly one root-table column TYPE divergence (the injected
+        # "Region" conflict on the shared fact_sales table). Subset/name-set
+        # differences are gated off, so the count is precisely 1.
+        df08 = m["flags_expected"]["DF-08"]
+        assert df08["fires"] is True and df08["count"] == 1, df08
+        tcp = m["table_column_projection"]
+        assert tcp["type_divergent_columns"] == 1, tcp
+        assert tcp["shared_tables"] >= 1 and tcp["rows"] > 0, tcp
+        # GOV-03: the divergence case is always injected (first certified source
+        # forced to carry an active warning), so it fires on median.
+        gov03 = m["flags_expected"]["GOV-03"]
+        assert gov03["fires"] is True and gov03["count"] >= 1, gov03
+        # GOV-02: the estate carries data-quality warnings, so the "feature is
+        # unused" flag is honestly silent (it fires only at zero warnings).
+        assert not m["flags_expected"]["GOV-02"]["fires"], m["flags_expected"]["GOV-02"]
     elif profile == "small":
         assert m["counts"]["workbooks"] == 100, m["counts"]
         assert not m["flags_expected"]["SEC-01"]["fires"]
         assert not m["flags_expected"]["SEM-02"]["fires"]
+        # No type conflict is injected outside the median, so DF-08 stays clean.
+        assert not m["flags_expected"]["DF-08"]["fires"], m["flags_expected"]["DF-08"]
     elif profile == "hostile":
         # hostile is validated in M3; here just ensure it built and has calcs
         assert m["counts"]["calculated_fields"] > 0
+        assert not m["flags_expected"]["DF-08"]["fires"], m["flags_expected"]["DF-08"]
 
 
 def write_fixture(profile, out_dir, seed=None):

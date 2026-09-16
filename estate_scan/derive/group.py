@@ -95,12 +95,19 @@ def _is_candidate(row):
     """A grouping candidate is a calculated field that computes a measure and is
     not an entitlement / row-level-security field. USERNAME/ISMEMBEROF/etc.
     fields are security constructs, not business-metric variants, so they are
-    excluded from concept grouping (they surface under SEC-01 instead)."""
+    excluded from concept grouping (they surface under SEC-01 instead).
+
+    A measure aggregates at least one base column. An aggregation wrapping only a
+    literal -- MAX(0.48), AVG(75) -- is a goal/threshold constant, not a business
+    metric, so it is not a candidate: grouping it produces a one-variant "concept"
+    that reads as a metric with a single definition, which is noise, not a
+    finding. Requiring a base column keeps the candidate set to fields that
+    actually compute over the estate's data."""
     formula = row["formula"] or ""
     if _UC_RE.search(formula):
         return False
-    _, funcs, _ = _signature(row["resolved_formula"])
-    return bool(funcs)
+    cols, funcs, _ = _signature(row["resolved_formula"])
+    return bool(funcs) and bool(cols)
 
 
 # ---------------------------------------------------------------------------

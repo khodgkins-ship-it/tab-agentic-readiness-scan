@@ -31,10 +31,15 @@ query datasource_fields($dsId: ID!, $first: Int!, $after: String) {
             role
             # Field-level usage linkage. Usage ranking (spec 03 §7.4) attributes
             # a variant's views to the workbooks whose sheets reference it, then
-            # joins to usage_events by workbook. UNCONFIRMED against live schema
-            # (M7 report-back): on a large estate this nested list may itself hit
-            # a node limit and need to become a paginated connection.
-            sheetsUsedIn: referencedBySheets {
+            # joins to usage_events by workbook. CONFIRMED against live schema
+            # (M7 report-back, 2026-09-15): the field on CalculatedField is
+            # `sheets: [Sheet]` (vendor/types-and-filters.md:550), NOT
+            # `referencedBySheets` (which does not exist and failed the first
+            # live scan). The downstream loader/fixture key off the `sheetsUsedIn`
+            # alias, so the underlying field name is insulated. Open item: on a
+            # very large estate this nested list may itself hit a node limit and
+            # need to become a paginated connection.
+            sheetsUsedIn: sheets {
               id
               name
               workbook { id luid }
@@ -43,6 +48,33 @@ query datasource_fields($dsId: ID!, $first: Int!, $after: String) {
           ... on ColumnField {
             dataType
             role
+            # Per-source column projection for DF-08 (root-table column
+            # divergence). upstreamColumns are the PHYSICAL columns this field
+            # maps onto, each tagged with its root table -- so two published
+            # sources built on the same physical table can be compared for
+            # column-set / type drift (extends DF-02's table-level fan-out;
+            # spec 05 §5). upstreamColumns is valid on ColumnField
+            # (vendor/types-and-filters.md); it is placed INSIDE this inline
+            # fragment so the vendored query validator attributes it to
+            # ColumnField, not to the outer fieldsConnection (the same
+            # brace-stripping that insulates `sheetsUsedIn` above). Column.table
+            # is the Table interface (id/name only); fullName/luid live on
+            # DatabaseTable, hence the inline fragment. Open item: on a very
+            # wide source this nested list may itself hit a node limit -- the
+            # runner's partial-response subdivision degrades it, but a paginated
+            # connection would be the durable fix.
+            upstreamColumns {
+              name
+              remoteType
+              table {
+                id
+                name
+                ... on DatabaseTable {
+                  luid
+                  fullName
+                }
+              }
+            }
           }
         }
         pageInfo { hasNextPage endCursor }

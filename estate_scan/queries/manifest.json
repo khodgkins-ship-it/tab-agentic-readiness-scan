@@ -35,7 +35,7 @@
     },
     "datasource_fields": {
       "file": "v1/datasource_fields.graphql",
-      "sha256": "d46618e78a2654ed768c69497b7b29c19883811a04608800c8203718ae624552",
+      "sha256": "b81c0848cd8d678dc314dd9ddabadceed3d2c133beb04d7fed8519aadda67266",
       "shard": {
         "scope": "per_datasource",
         "scope_var": "dsId",
@@ -47,6 +47,26 @@
     "custom_sql": {
       "file": "v1/custom_sql.graphql",
       "sha256": "e77cc9329da8e2a63dde9c3d38da19bdf285d7f7bdd52606c28248ad56260806",
+      "shard": {
+        "scope": "global",
+        "page_size": 500,
+        "cursor_var": "after",
+        "first_var": "first"
+      }
+    },
+    "database_tables": {
+      "file": "v1/database_tables.graphql",
+      "sha256": "c161b43f20ea29cc5366f28d08b8d9bc1499376f8c9816c453e5cdc7513e677b",
+      "shard": {
+        "scope": "global",
+        "page_size": 500,
+        "cursor_var": "after",
+        "first_var": "first"
+      }
+    },
+    "data_quality_warnings": {
+      "file": "v1/data_quality_warnings.graphql",
+      "sha256": "587c1e5f5d80d2078eb539d48ff4b51f4c58670ea715d7046e8b07dd933caa05",
       "shard": {
         "scope": "global",
         "page_size": 500,

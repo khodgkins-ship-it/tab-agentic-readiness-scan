@@ -52,6 +52,23 @@ def test_invalid_config_shape_reports_config_error(tmp_path):
         main(["scan", "--config", cfg, "--out", str(tmp_path / "out")])
 
 
+def test_valid_permissions_sample_passes():
+    from estate_scan.config import validate_config
+    cfg = validate_config({"host": "https://x.online.tableau.com",
+                           "deployment_type": "cloud", "site_content_url": "",
+                           "permissions_sample": 100})
+    assert cfg["permissions_sample"] == 100
+
+
+@pytest.mark.parametrize("bad", [-1, "50", 3.5, True])
+def test_invalid_permissions_sample_is_rejected(bad):
+    from estate_scan.config import ConfigError, validate_config
+    with pytest.raises(ConfigError):
+        validate_config({"host": "https://x.online.tableau.com",
+                         "deployment_type": "cloud", "site_content_url": "",
+                         "permissions_sample": bad})
+
+
 def test_live_without_config_is_refused(tmp_path):
     with pytest.raises(SystemExit) as exc:
         main(["scan", "--fixture", "tests/fixtures/median", "--live",

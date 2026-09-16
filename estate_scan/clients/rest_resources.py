@@ -16,13 +16,24 @@ a mutation has no path to the wire.
 Path templates carry `{version}` and `{site_id}` placeholders the live client
 fills from the negotiated API version and the signed-in site. The registry is
 frozen (a read-only mapping) once this module is imported.
+
+Per-object permissions live in a **separate** frozen registry
+(`PERMISSION_RESOURCES`, keyed by object type). Tableau has no bulk permissions
+endpoint -- grants are read one object at a time -- so those templates carry an
+extra `{object_id}` placeholder and are deliberately NOT reachable through the
+generic by-name `rest(resource)` path (which fills only `{version}`/`{site_id}`).
+The permissions sampler in `live.py` resolves them by object type and formats
+the id itself, still through the single GET-only `_rest_get`. They are GET, so
+they register through the same `RestResource` gate; a non-GET permission
+resource would fail the build exactly like any other.
 """
 
 from types import MappingProxyType
 
 from estate_scan.readonly import ReadOnlyViolation
 
-__all__ = ["RestResource", "get", "names", "is_registered", "REGISTRY"]
+__all__ = ["RestResource", "get", "names", "is_registered", "REGISTRY",
+           "PERMISSION_RESOURCES", "permission_resource", "permission_names"]
 
 # Only these methods may appear in the registry. GET always; a read-only POST
 # would be added here explicitly and reviewed -- R1 has none.
@@ -90,6 +101,31 @@ _REGISTRY = dict([
 #: Frozen, read-only view of the registry (cannot be mutated at runtime).
 REGISTRY = MappingProxyType(_REGISTRY)
 
+# Per-object permission reads (SEC-02 / governance). Keyed by *object type* --
+# not exposed through the generic `rest(resource)` name space, because their
+# paths need an `{object_id}` the generic path never fills. The sampler in the
+# live client lists objects (via the GET content endpoints above), then reads
+# each object's grants through one of these GET-only specs. `item_key` is the
+# repeated element inside `permissions`: a Tableau permissions body nests as
+# ``{permissions: {<objtype>: {...}, granteeCapabilities: [ ... ]}}``.
+_PERMISSIONS = dict([
+    ("project", RestResource(
+        "project_permissions", "GET",
+        "/api/{version}/sites/{site_id}/projects/{object_id}/permissions",
+        "granteeCapabilities")),
+    ("datasource", RestResource(
+        "datasource_permissions", "GET",
+        "/api/{version}/sites/{site_id}/datasources/{object_id}/permissions",
+        "granteeCapabilities")),
+    ("workbook", RestResource(
+        "workbook_permissions", "GET",
+        "/api/{version}/sites/{site_id}/workbooks/{object_id}/permissions",
+        "granteeCapabilities")),
+])
+
+#: Frozen, read-only view of the per-object permission registry.
+PERMISSION_RESOURCES = MappingProxyType(_PERMISSIONS)
+
 
 def get(name):
     # type: (str) -> RestResource
@@ -114,3 +150,22 @@ def names():
 def is_registered(name):
     # type: (str) -> bool
     return name in _REGISTRY
+
+
+def permission_resource(object_type):
+    # type: (str) -> RestResource
+    """Resolve the GET-only permission endpoint for an object type
+    ("project"|"datasource"|"workbook"), or raise `KeyError`."""
+    try:
+        return _PERMISSIONS[object_type]
+    except KeyError:
+        raise KeyError(
+            "no permission resource for object type %r; registered: %s"
+            % (object_type, ", ".join(sorted(_PERMISSIONS))))
+
+
+def permission_names():
+    # type: () -> list
+    """The logical names of the per-object permission resources (for Gate-B
+    tests that assert every registered read endpoint is GET)."""
+    return sorted(r.name for r in _PERMISSIONS.values())

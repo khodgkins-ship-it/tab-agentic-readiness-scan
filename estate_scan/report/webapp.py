@@ -44,15 +44,15 @@ def webapp_payload(findings):
             "app_template_version")},
         "facets": [_facet(f) for f in findings.get("facets", [])],
         "domains": [_domain(d) for d in findings.get("domains", [])],
-        "flags": [{k: fl.get(k) for k in
-                   ("id", "severity", "confidence", "facet", "domain", "count")}
-                  for fl in findings.get("flags", [])],
+        "flags": [_flag(fl) for fl in findings.get("flags", [])],
         "coverage": [{k: c.get(k) for k in ("measure", "status", "reason")}
                      for c in findings.get("coverage", [])],
         "findings": {
             "definition_multiplicity": _dm(fnd.get("definition_multiplicity", {})),
             "security_exposure": _security(fnd.get("security_exposure", {})),
             "retirement": _retirement(fnd.get("retirement", {})),
+            "governance_posture": _governance_posture(
+                fnd.get("governance_posture", {})),
         },
     }
 
@@ -61,6 +61,12 @@ def _facet(f):
     # type: (dict) -> dict
     return {k: f.get(k) for k in
             ("id", "dimension", "score", "evidence", "confidence", "gates")}
+
+
+def _flag(fl):
+    # type: (dict) -> dict
+    return {k: fl.get(k) for k in
+            ("id", "severity", "confidence", "facet", "domain", "count")}
 
 
 def _domain(d):
@@ -73,6 +79,8 @@ def _domain(d):
 def _dm(dm):
     # type: (dict) -> dict
     return {
+        "usage_measured": dm.get("usage_measured", True),
+        "multiplicity_group_count": dm.get("multiplicity_group_count", 0),
         "contested_group_count": dm.get("contested_group_count", 0),
         "groups": [_dm_group(g) for g in dm.get("groups", [])],
     }
@@ -87,6 +95,8 @@ def _dm_group(g):
         "workbooks_affected": g.get("workbooks_affected"),
         "disagreeing_variants": g.get("disagreeing_variants"),
         "variants_covering_80pct_views": g.get("variants_covering_80pct_views"),
+        "multiplicity": g.get("multiplicity"),
+        "dominance": g.get("dominance"),
         "dominant": g.get("dominant"),
         "variants": [_variant(v) for v in g.get("variants", [])],
     }
@@ -150,9 +160,67 @@ def _security(s):
 def _retirement(r):
     # type: (dict) -> dict
     return {k: r.get(k) for k in (
-        "workbooks_total", "zero_view_workbooks", "total_views",
+        "workbooks_total", "usage_measured", "zero_view_workbooks", "total_views",
         "workbooks_covering_70pct_views", "workbooks_covering_80pct_views",
         "redundant_source_tables", "max_sources_per_table")}
+
+
+# Every mechanism key any arc may carry (detective: certification / DQW;
+# preventive: permission grants / explicit Deny). Absent keys are dropped so each
+# mechanism dict keeps only its own fields -- the app reads by mechanism name.
+_MECH_KEYS = ("mechanism", "measured", "status", "certified_sources",
+              "published_sources", "warnings_total", "warnings_active",
+              "grants_total", "objects_covered", "deny_rules")
+
+
+def _governance_posture(gp):
+    # type: (dict) -> dict
+    """Project the non-gating observed-presence evidence. Names, object/group
+    identifiers, and counts only (no owner names anywhere in the source block),
+    so it is safe in both build variants; the app renders it as "observed --
+    assessed by interview". Each arc carries whichever contrast block it computed
+    -- the detective arc a certification/DQW `divergence`, the preventive arc a
+    permission `exposure` -- so only the present one is projected."""
+    arcs = []
+    for a in gp.get("arcs", []):
+        arc = {
+            "arc": a.get("arc"),
+            "scored_by": a.get("scored_by"),
+            "mechanisms": [{k: m[k] for k in _MECH_KEYS if k in m}
+                           for m in a.get("mechanisms", [])],
+        }
+        if "divergence" in a:
+            arc["divergence"] = _divergence(a.get("divergence", {}))
+        if "exposure" in a:
+            arc["exposure"] = _exposure(a.get("exposure", {}))
+        arcs.append(arc)
+    return {"note": gp.get("note"), "arcs": arcs}
+
+
+def _divergence(dv):
+    # type: (dict) -> dict
+    return {
+        "measured": dv.get("measured", False),
+        "count": dv.get("count"),
+        "bad_examples": [{k: e.get(k) for k in (
+            "datasource_name", "warning_type", "is_elevated")}
+            for e in dv.get("bad_examples", [])],
+        "good_examples": [{"datasource_name": e.get("datasource_name")}
+                          for e in dv.get("good_examples", [])],
+    }
+
+
+def _exposure(ex):
+    # type: (dict) -> dict
+    keys = ("object_type", "object_id", "capability", "grantee")
+    return {
+        "measured": ex.get("measured", False),
+        "count": ex.get("count"),
+        "bad_examples": [{k: e.get(k) for k in keys}
+                         for e in ex.get("bad_examples", [])],
+        "good_examples": [{k: e.get(k) for k in keys}
+                          for e in ex.get("good_examples", [])],
+    }
 
 
 def _trim_variants(payload):

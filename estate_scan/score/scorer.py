@@ -17,7 +17,7 @@ import json
 from typing import Dict, List, Optional
 
 from estate_scan.flags.engine import load_rules
-from estate_scan.score.facets import score_facet
+from estate_scan.score.facets import score_facet, score_threshold
 from estate_scan.score.rollup import (dimension_rollup, domain_rollup,
                                       governance_binding, governance_score)
 
@@ -58,6 +58,17 @@ def score(store, run_id, config=None, rules=None, rules_path=None, now=None):
             rec["confidence"] = "observed"
             facets_out[fid] = rec
 
+    # 1b. observed governance arcs (accountability, assurance) -----------------
+    # Scored like threshold facets from the arc measures declared in
+    # governance_arcs, coverage-gated so an unmeasured feed yields no reading.
+    # They enter facets_out as governance.<arc> so the one interview loop below
+    # reconciles them with any interview claim by the same scan-wins rule; the
+    # arcs the scan cannot observe (preventive, corrective) stay absent and are
+    # supplied by the interview.
+    for fid, rec in _observed_arc_facets(store, run_id, arcs_def).items():
+        rec["confidence"] = "observed"
+        facets_out[fid] = rec
+
     # 2. interview application -------------------------------------------------
     store.clear_flag(run_id, "INT-01")
     by_facet = {}  # type: Dict[str, list]
@@ -91,7 +102,7 @@ def score(store, run_id, config=None, rules=None, rules_path=None, now=None):
     domains_out = []  # type: List[dict]
     targeted = [d for d in config.get("domains", []) if d.get("target_stage")]
     if targeted:
-        arc_scores = _arc_scores(by_facet, arcs_def)
+        arc_scores = _arc_scores(facets_out, arcs_def)
         for d in targeted:
             target = d["target_stage"]
             dim_scores = dimension_rollup(facets_list, target)
@@ -121,17 +132,82 @@ def _raise_int01(store, run_id, facet_id, scan_score, response, now):
                     facet_id, json.dumps(evidence, sort_keys=True), 1, now)
 
 
-def _arc_scores(by_facet, arcs_def):
-    # type: (Dict[str, list], dict) -> Dict[str, int]
-    """Governance arc scores from interview responses named governance.<arc>.
-    Empty in the prototype, so governance reports as unscored."""
+def _arc_scores(facets_out, arcs_def):
+    # type: (Dict[str, dict], dict) -> Dict[str, int]
+    """Governance arc tier scores, projected from the reconciled governance
+    facets in `facets_out`. Each governance.<arc> record -- observed from the
+    scan (ownership, certification) or supplied by the interview for an arc the
+    scan cannot see -- contributes its score to the loop. Scan-wins and INT-01
+    were already applied when the facets were assembled, so this just maps facet
+    ids onto arc names. Arcs with no record are absent, and governance_score
+    treats an active-but-absent arc as unscored."""
     scores = {}  # type: Dict[str, int]
-    for facet_id, responses in by_facet.items():
-        if not facet_id.startswith("governance."):
+    for fid, rec in facets_out.items():
+        if not fid.startswith("governance."):
             continue
-        arc = facet_id.split(".", 1)[1]
-        if arc in arcs_def:
-            best = max(responses, key=lambda r: (r["score"] or 0))
-            if best["score"] is not None:
-                scores[arc] = best["score"]
+        arc = fid.split(".", 1)[1]
+        if arc in arcs_def and rec.get("score") is not None:
+            scores[arc] = rec["score"]
     return scores
+
+
+def _m_ownership_coverage(store, run_id):
+    # type: (object, str) -> Optional[float]
+    """Share of published sources carrying a named owner -- the accountability
+    arc. None when there are no sources to own (an empty denominator is no
+    reading, not a zero)."""
+    total = store.count("datasources", run_id)
+    if not total:
+        return None
+    missing = len(store.datasources_missing_owner(run_id))
+    return (total - missing) / float(total)
+
+
+def _m_certification_coverage(store, run_id):
+    # type: (object, str) -> Optional[float]
+    """Certified share of published sources -- the assurance arc. None on an
+    empty denominator."""
+    certified, total = store.datasource_certification_counts(run_id)
+    if not total:
+        return None
+    return certified / float(total)
+
+
+# Governance arc measures. Kept apart from the facet MEASURES registry because
+# these return None (no reading) on an empty denominator rather than 0.0 (a
+# genuine low), so an arc with nothing to measure is unread, not scored 1.
+_ARC_MEASURES = {
+    "ownership_coverage": _m_ownership_coverage,
+    "certification_coverage": _m_certification_coverage,
+}
+
+
+def _observed_arc_facets(store, run_id, arcs_def):
+    # type: (object, str, dict) -> Dict[str, dict]
+    """The governance arcs the scan can observe, as facet records keyed
+    governance.<arc>. An arc declares its `measure` and `bands` in
+    governance_arcs and is scored like any threshold facet, coverage-gated on
+    its `requires_coverage` measures. An arc with no observed measure, an
+    unmeasured feed, or an empty-denominator measure yields no record -- so it
+    stays unread and falls to the interview, never to a false score."""
+    out = {}  # type: Dict[str, dict]
+    for arc, spec in arcs_def.items():
+        measure_name = spec.get("measure")
+        if not measure_name:
+            continue
+        if any(store.coverage_status(run_id, req) != "ok"
+               for req in spec.get("requires_coverage") or []):
+            continue
+        fn = _ARC_MEASURES.get(measure_name)
+        if fn is None:
+            raise ValueError("no governance arc measure %r for arc %s"
+                             % (measure_name, arc))
+        value = fn(store, run_id)
+        if value is None:
+            continue
+        score, derivation = score_threshold(spec.get("bands", {}), value, {})
+        fid = "governance.%s" % arc
+        out[fid] = {"id": fid, "dimension": "governance", "score": score,
+                    "evidence": "observed", "derivation": derivation,
+                    "inputs": {measure_name: round(value, 4)}, "gates": []}
+    return out
