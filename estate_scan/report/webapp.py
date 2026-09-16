@@ -16,6 +16,9 @@ import json
 import os
 from typing import List, Optional
 
+from estate_scan.report.labels import (dimension_name, facet_description,
+                                        facet_name, flag_description, flag_name)
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _WEBAPP_DIR = os.path.join(_HERE, "webapp")
 
@@ -59,21 +62,40 @@ def webapp_payload(findings):
 
 def _facet(f):
     # type: (dict) -> dict
-    return {k: f.get(k) for k in
-            ("id", "dimension", "score", "evidence", "confidence", "gates")}
+    # `id` stays as the join key (binding-constraint match, flag->facet link) but
+    # the app renders `name`/`description`, never the raw dotted code.
+    fid = f.get("id")
+    out = {k: f.get(k) for k in
+           ("id", "dimension", "score", "evidence", "confidence", "gates")}
+    out["name"] = facet_name(fid)
+    out["description"] = facet_description(fid)
+    out["dimension_label"] = dimension_name(f.get("dimension"))
+    return out
 
 
 def _flag(fl):
     # type: (dict) -> dict
-    return {k: fl.get(k) for k in
-            ("id", "severity", "confidence", "facet", "domain", "count")}
+    # `id` stays for the facet linkage; the app shows `name`/`description`.
+    fid = fl.get("id")
+    out = {k: fl.get(k) for k in
+           ("id", "severity", "confidence", "facet", "domain", "count")}
+    out["name"] = flag_name(fid)
+    out["description"] = flag_description(fid)
+    return out
 
 
 def _domain(d):
     # type: (dict) -> dict
-    return {k: d.get(k) for k in
-            ("id", "target_stage", "readiness", "gap", "binding_constraints",
-             "unscored_dimensions", "confidence")}
+    # `binding_constraints`/`unscored_dimensions` keep their codes as join keys;
+    # the *_labels lists carry the reader-facing names the app renders.
+    out = {k: d.get(k) for k in
+           ("id", "target_stage", "readiness", "gap", "binding_constraints",
+            "unscored_dimensions", "confidence")}
+    out["binding_constraint_labels"] = [
+        facet_name(b) for b in d.get("binding_constraints") or []]
+    out["unscored_dimension_labels"] = [
+        dimension_name(u) for u in d.get("unscored_dimensions") or []]
+    return out
 
 
 def _dm(dm):

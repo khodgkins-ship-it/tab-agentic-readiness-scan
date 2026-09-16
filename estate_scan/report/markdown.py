@@ -10,6 +10,8 @@ presentation report.md inherits the same redaction as the web app.
 
 from typing import List
 
+from estate_scan.report.labels import dimension_name, facet_name
+
 _STAGE_NAMES = {
     1: "Minimal", 2: "Emerging", 3: "Performing",
     4: "Optimizing", 5: "Leading", 6: "Autonomous",
@@ -86,7 +88,8 @@ def _cover(a, findings):
     a("## Cover")
     a("")
     for d in domains:
-        binding = ", ".join(d.get("binding_constraints", [])) or "none"
+        binding = ", ".join(facet_name(b)
+                            for b in d.get("binding_constraints", [])) or "none"
         a("- **%s** — current stage %s, target %s, binding constraint: %s "
           "(confidence: %s)"
           % (d["id"], _stage(d.get("readiness")), _stage(d.get("target_stage")),
@@ -329,7 +332,7 @@ def _dimensions(a, findings):
     for f in facets:
         gates = ", ".join(str(g) for g in f.get("gates", [])) or "—"
         a("| %s | %s | %s | %s | %s |"
-          % (f["id"], f.get("dimension"), f["score"],
+          % (facet_name(f["id"]), dimension_name(f.get("dimension")), f["score"],
              f.get("evidence") or f.get("confidence"), gates))
     a("")
 
@@ -343,7 +346,8 @@ def _register(a, findings):
     a("| Domain | Target | Current | Gap | Binding constraint | Confidence |")
     a("|---|--:|--:|--:|---|---|")
     for d in domains:
-        binding = ", ".join(d.get("binding_constraints", [])) or "none"
+        binding = ", ".join(facet_name(b)
+                            for b in d.get("binding_constraints", [])) or "none"
         a("| %s | %s | %s | %s | %s | %s |"
           % (d["id"], _stage(d.get("target_stage")), _stage(d.get("readiness")),
              d.get("gap"), binding, d.get("confidence")))
@@ -352,7 +356,7 @@ def _register(a, findings):
         unscored = d.get("unscored_dimensions", [])
         if unscored:
             a("- **%s** unscored dimensions: %s"
-              % (d["id"], ", ".join(unscored)))
+              % (d["id"], ", ".join(dimension_name(u) for u in unscored)))
     a("")
 
 

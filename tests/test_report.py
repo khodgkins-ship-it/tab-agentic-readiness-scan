@@ -31,6 +31,7 @@ from estate_scan.report import emit
 from estate_scan.report.compare import compare_runs, render_comparison_markdown
 from estate_scan.report.emit import emit_all
 from estate_scan.report.findings import _definition_multiplicity, build_findings
+from estate_scan.report.labels import dimension_name, facet_name
 from estate_scan.report.markdown import render_markdown
 from estate_scan.report.redact import (SecretLeak, assert_no_secrets, mark_working,
                                         redact)
@@ -190,6 +191,70 @@ def test_webapp_payload_is_a_subset(tmp_path):
     assert set(payload.keys()) == _FINDINGS_KEYS
     # The payload drops the formula-bearing security `fields` list entirely.
     assert "fields" not in payload["findings"]["security_exposure"]
+
+
+# -- internal codes never surface to the reader ------------------------------
+# A consumer of the report has no idea what "SEM-03" or "semantic.describability"
+# means, so the internal identifiers stay join-keys-only: the reader sees the
+# name/description from labels.py, never the bare code.
+
+# The flag catalog codes (SEM-03, DF-01, GOV-03, ...) as they appear in text.
+_FLAG_CODE_RE = re.compile(r"\b[A-Z]{2,3}-\d{2}\b")
+
+
+def test_markdown_shows_names_not_codes(tmp_path):
+    store, _config = _scored_store("median")
+    findings = build_findings(store, "r")
+    md = render_markdown(findings)
+
+    facet_ids = {f["id"] for f in findings["facets"]}
+    assert facet_ids, "fixture should score some facets to make this meaningful"
+    for fid in facet_ids:
+        # the dotted facet code is a join key only -- never rendered
+        assert fid not in md, "facet code %r leaked into the report" % fid
+        assert facet_name(fid) in md, \
+            "facet name for %r missing from the report" % fid
+
+    # no flag catalog code (markdown surfaces flags only through their findings)
+    assert not _FLAG_CODE_RE.search(md), \
+        "a flag catalog code (e.g. SEM-03) appeared in the report"
+
+    # unscored dimensions render as names, never the snake_case code
+    for d in findings["domains"]:
+        for dim in d.get("unscored_dimensions", []):
+            if "_" in dim:                 # e.g. action_surface, operating_model
+                assert dim not in md, "dimension code %r leaked" % dim
+            assert dimension_name(dim) in md
+
+
+def test_webapp_payload_carries_labels_not_bare_codes(tmp_path):
+    store, _config = _scored_store("median")
+    findings = build_findings(store, "r")
+    payload = webapp_payload(findings)
+
+    # Every facet the app renders carries a human name + description; the raw
+    # dotted id stays only as the join key the app matches on.
+    assert payload["facets"], "fixture should score some facets"
+    for f in payload["facets"]:
+        assert f["name"] and f["name"] != f["id"]
+        assert f["name"] == facet_name(f["id"])
+        assert f["description"]
+        assert f["dimension_label"] == dimension_name(f["dimension"])
+
+    # Every flag the app renders carries a human name, never the catalog code.
+    assert payload["flags"], "fixture should fire some flags"
+    for fl in payload["flags"]:
+        assert fl["name"] and fl["name"] != fl["id"]
+        assert not _FLAG_CODE_RE.match(fl["name"])
+        assert fl["description"]
+
+    # Binding-constraint and unscored-dimension display lists stay aligned with
+    # their join-key lists and carry names, not the dotted/underscore codes.
+    for d in payload["domains"]:
+        assert len(d["binding_constraint_labels"]) == len(d["binding_constraints"])
+        assert all("." not in label for label in d["binding_constraint_labels"])
+        assert len(d["unscored_dimension_labels"]) == len(d["unscored_dimensions"])
+        assert all("_" not in label for label in d["unscored_dimension_labels"])
 
 
 # -- two builds from one run -------------------------------------------------

@@ -9,10 +9,16 @@
                 scan_started_at, scan_completed_at, grouping_mode,
                 adoption_source, tool_version, query_set_version,
                 app_template_version}
-     facets    [{id, dimension, score, confidence, evidence, gates, finding}]
+     facets    [{id, name, description, dimension, dimension_label, score,
+                 confidence, evidence, gates, finding}]
      domains   [{id, target_stage, readiness, gap, binding_constraints,
-                 unscored_dimensions, confidence}]
-     flags     [{id, severity, confidence, facet, domain, count}]
+                 binding_constraint_labels, unscored_dimensions,
+                 unscored_dimension_labels, confidence}]
+     flags     [{id, name, description, severity, confidence, facet, domain,
+                 count}]
+       id/facet/dimension/binding_constraints/unscored_dimensions are internal
+       join keys, never shown; the reader-facing strings are name/description
+       and the *_label(s) fields.
      coverage  [{measure, status, reason}]
      findings  {definition_multiplicity, security_exposure, retirement,
                 governance_posture}
@@ -109,8 +115,8 @@
           d ? stageLabel(d.readiness) : "unscored", false));
         facts.appendChild(fact("Target stage",
           d ? stageLabel(d.target_stage) : "not declared", false));
-        var binding = d && d.binding_constraints && d.binding_constraints.length
-          ? d.binding_constraints.join(", ") : "none";
+        var binding = d && d.binding_constraint_labels && d.binding_constraint_labels.length
+          ? d.binding_constraint_labels.join(", ") : "none";
         facts.appendChild(fact("Binding constraint", binding, true));
       }
       sec.appendChild(facts);
@@ -664,7 +670,7 @@
           (binding[f.id] ? " row-binding" : "")});
         var sum = el("summary");
         var left = el("span", {}, [
-          txt(f.id + "  "),
+          txt((f.name || f.id) + "  "),
           binding[f.id] ? el("span", {class: "tag-binding", text: "BINDING"}) : null]);
         var right = el("span", {}, [
           evidenceChip(f),
@@ -672,9 +678,10 @@
         sum.appendChild(left); sum.appendChild(right);
         det.appendChild(sum);
         var body = el("div", {class: "expander-body"});
+        if (f.description) body.appendChild(el("p", {text: f.description}));
         if (f.finding) body.appendChild(el("p", {text: f.finding}));
         body.appendChild(el("p", {class: "baseline-note", text:
-          "dimension: " + (f.dimension || "?") +
+          "dimension: " + (f.dimension_label || f.dimension || "?") +
           " · confidence: " + (f.confidence || "?") + " · gates: " +
           ((f.gates || []).join(", ") || "—")}));
         var fl = (DATA.flags || []).filter(function (x) { return x.facet === f.id; });
@@ -713,14 +720,16 @@
           stageLabel(d.readiness)}));
         det.appendChild(sum);
         var body = el("div", {class: "expander-body"});
-        var binding = (d.binding_constraints || []).join(", ") || "none";
+        var binding = (d.binding_constraint_labels ||
+          d.binding_constraints || []).join(", ") || "none";
         body.appendChild(el("p", {}, [
           el("strong", {text: "Binding constraint: "}), txt(binding),
           el("span", {class: "tag-binding", text: "BINDING"})]));
         body.appendChild(el("p", {class: "baseline-note", text:
           "gap: " + (d.gap == null ? "—" : d.gap) + " · confidence: " +
           (d.confidence || "?")}));
-        var unscored = d.unscored_dimensions || [];
+        var unscored = d.unscored_dimension_labels ||
+          d.unscored_dimensions || [];
         if (unscored.length)
           body.appendChild(el("p", {class: "baseline-note",
             text: "Unscored dimensions: " + unscored.join(", ")}));
@@ -744,7 +753,8 @@
           "engagement — the tool does not synthesize them."}));
         var ol = el("ol");
         (DATA.domains || []).forEach(function (d) {
-          var names = d.binding_constraints || [];
+          var names = d.binding_constraint_labels ||
+            d.binding_constraints || [];
           names.forEach(function (name) {
             ol.appendChild(el("li", {text:
               "Lift " + name + " to clear the " + d.id + " target (" +
@@ -952,8 +962,10 @@
     var ul = el("ul");
     flags.forEach(function (fl) {
       var li = el("li", {}, [
-        el("strong", {text: fl.id + " "}),
+        el("strong", {text: (fl.name || fl.id) + " "}),
         severityChip(fl.severity), txt(" count " + num(fl.count))]);
+      if (fl.description)
+        li.appendChild(el("div", {class: "baseline-note", text: fl.description}));
       ul.appendChild(li);
     });
     return ul;
