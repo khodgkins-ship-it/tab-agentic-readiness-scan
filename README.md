@@ -9,7 +9,7 @@ The tool is the `estate_scan/` Python package. The numbered specification docume
 Requires **Python 3.9 or newer** (developed and tested through 3.14). The only runtime dependencies are `httpx`, `jinja2`, `openpyxl`, and `pyyaml`; SQLite is used through the standard library.
 
 ```bash
-git clone <repository-url>        # the tab-agentic-readiness-scan repository
+git clone https://github.com/khodgkins-ship-it/tab-agentic-readiness-scan.git
 cd tab-agentic-readiness-scan
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
