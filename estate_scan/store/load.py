@@ -918,6 +918,36 @@ class Store(object):
             "SELECT id FROM datasources WHERE run_id=? ORDER BY id", (run_id,))
         return [row["id"] for row in cur.fetchall()]
 
+    def datasources_in_project(self, run_id, project_name):
+        # type: (str, str) -> List[sqlite3.Row]
+        """Published sources whose project matches `project_name` (case-
+        insensitive), ordered by name. Used to resolve the Admin Insights source
+        the Cloud usage read queries against, from data already extracted."""
+        cur = self.conn.execute(
+            "SELECT id, luid, name, project_name FROM datasources "
+            "WHERE run_id=? AND LOWER(project_name)=LOWER(?) ORDER BY name",
+            (run_id, project_name))
+        return cur.fetchall()
+
+    def workbook_luid_to_id(self, run_id):
+        # type: (str) -> Dict[str, str]
+        """Map each workbook's luid to its internal id -- the join the VDS usage
+        read needs, since Admin Insights keys events by workbook luid but the
+        usage_events table keys by the internal workbook id."""
+        cur = self.conn.execute(
+            "SELECT id, luid FROM workbooks WHERE run_id=? AND luid IS NOT NULL",
+            (run_id,))
+        return {row["luid"]: row["id"] for row in cur.fetchall()}
+
+    def set_adoption_source(self, run_id, source):
+        # type: (str, str) -> None
+        """Record where adoption data actually came from, once known at extract
+        time (e.g. `admin_insights` after a successful VDS usage read). The run
+        row seeds this from the client's default; this corrects it to the truth."""
+        self.conn.execute("UPDATE runs SET adoption_source=? WHERE run_id=?",
+                          (source, run_id))
+        self.conn.commit()
+
     def count(self, table, run_id):
         # type: (str, str) -> int
         # table is a fixed internal identifier, never user input.

@@ -89,14 +89,23 @@ class FixtureTransport(object):
                                  POST-only query-datasource endpoint) answer 405
                                  (service present); False answers 404 (absent).
       * ``vds_values``        -- {"<luid>::<fieldCaption>": number} the VDS query
-                                 branch answers aggregate reads from; an unknown
-                                 measure returns an empty data row (value None).
+                                 branch answers single-measure aggregate reads
+                                 from; an unknown measure returns an empty data
+                                 row (value None).
+      * ``vds_rows``          -- {"<luid>": [row, ...]} the VDS branch answers a
+                                 *grouped* query from (a query carrying a
+                                 dimension / aliased measures, as the usage
+                                 extractor builds). Each row is a dict already
+                                 keyed by the captions/aliases the caller reads
+                                 (e.g. the workbook-luid caption + view_count +
+                                 last_event_date). A luid with no entry answers an
+                                 empty result set (a legitimately quiet source).
     """
 
     def __init__(self, estate, api_version="3.24", partial_over=None,
                  signin_status=200, metadata_available=True,
                  graphql_status=200, rest_status=403, list_status=200,
-                 vds_available=False, vds_values=None):
+                 vds_available=False, vds_values=None, vds_rows=None):
         self._fc = FixtureClient(estate, partial_over=partial_over)
         self._estate = estate
         meta = estate.get("meta", {})
@@ -113,6 +122,7 @@ class FixtureTransport(object):
         self.list_status = list_status
         self.vds_available = vds_available
         self._vds_values = vds_values or {}
+        self._vds_rows = vds_rows or {}
         self._signin_count = 0
         self.requests = []  # type: list  # (method, path) in call order
         self.transport = httpx.MockTransport(self._handle)
@@ -206,6 +216,14 @@ class FixtureTransport(object):
         body = json.loads(request.content.decode("utf-8"))
         luid = (body.get("datasource") or {}).get("datasourceLuid")
         fields = (body.get("query") or {}).get("fields") or []
+        # A grouped query (usage extraction) carries a dimension field (no
+        # `function`) or aliased measures; answer it from the per-datasource row
+        # list. A single-measure query (material disagreement) has one function
+        # field and no alias; answer it from `vds_values`, unchanged.
+        grouped = any("fieldAlias" in f for f in fields) \
+            or any("function" not in f for f in fields)
+        if grouped:
+            return httpx.Response(200, json={"data": list(self._vds_rows.get(luid, []))})
         caption = fields[0].get("fieldCaption") if fields else None
         key = "%s::%s" % (luid, caption)
         if key in self._vds_values:

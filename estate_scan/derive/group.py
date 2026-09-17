@@ -1,29 +1,43 @@
 """Concept grouping (build spec section 7.3, methodology section 5 step 4).
 
-Hashing (M3) finds *identical logic*. Grouping finds the *same business metric
-under different names* -- Revenue, Total Revenue, Net Rev, Rev USD -- so the
-variant count a customer adjudicates is the count of concepts, not of formulas.
+Hashing (M3) finds *identical logic*. Grouping finds definitions of one
+business metric so the variant count a customer adjudicates is the count of
+concepts, not of raw formulas.
 
-Three passes, each recording `method` and `confidence` on the group it forms:
+Two tiers of grouping, each recording `method` and `confidence`:
 
-  1. exact / normalized match  -- identical normalized name or identical
-     resolved-formula hash. Deterministic, high confidence.
-  2. token + formula signature -- conservative structural blocking plus a
-     shared-base-column / shared-name-token link. Medium confidence, always
-     human-reviewable.
-  3. model-assisted            -- opt-in, OFF by default in the prototype
-     (build brief section 6). When off, it is a recorded no-op; the local
-     passes stand as the fallback.
+  1. formula signature  -- the deterministic backbone. Each field is bucketed
+     by its *canonical formula signature*: the set of aggregation functions it
+     uses, the set of base columns it aggregates, and whether it is a ratio.
+     Fields that compute the same measure over the same inputs the same way
+     land in one bucket. A bucket whose members all carry one resolved-formula
+     hash is identical logic (high confidence); a bucket spanning several
+     hashes is structurally equivalent but not byte-identical (medium).
+  2. model-assisted     -- opt-in, OFF by default in the prototype (build brief
+     section 6). When off, it is a recorded no-op; tier 1 stands as the
+     fallback.
 
-The blocking key for pass 2 is a *structural fingerprint*: the set of
-aggregation functions a resolved formula uses, and whether it is a ratio. Two
-variants of one concept share computational shape; two different concepts do
-not, even when they share a base column. Blocking on shape first means a
-shared column such as [Sales] links revenue variants to each other without
-also pulling in gross margin (a ratio) or average order value (divides by a
-COUNTD). Linking is then by shared base column or shared name token *within* a
-block. This is a general heuristic, not a per-metric rule set: it encodes no
-knowledge of what "revenue" or "churn" means.
+Why exact-key bucketing rather than transitive linking. An earlier design
+linked fields that shared a single base column *or* a single name token and
+stitched those links with union-find. On a templated estate (Tableau
+accelerators) that chains catastrophically: a date-spine column such as
+[Current Year] appears in thousands of unrelated KPI fields, and templating
+name tokens (value, total, perf, vs, mtd) appear in thousands more, so a single
+shared boilerplate item fuses thousands of distinct calculations into one
+spurious "concept." Frequency cannot separate a real metric noun from
+boilerplate -- a fixture's essential link column can be more common than a live
+estate's worst hub -- so the distinction is semantic, not structural. Exact
+signature bucketing sidesteps this entirely: a field joins exactly one bucket,
+so a shared column or token can never chain distinct concepts together.
+
+The deliberate cost is under-grouping. Differently-*named* variants of one
+metric that also differ in formula shape -- Net Rev = SUM([Sales]) - SUM([Discount])
+vs Revenue = SUM([Sales]) -- are NOT merged by tier 1: they have different
+signatures. Merging them is a semantic judgment ("these two differently-shaped
+formulas mean the same business metric") that no frequency or structural rule
+can make safely, so it is reserved for the opt-in model pass. Tier 1 errs
+toward showing a concept's variants separately rather than fabricating a merge
+of unrelated calculations -- precision over recall.
 
 THE HARD RULE (build brief section 6, spec 7.3). The tool never authors a
 recommended or authoritative definition. A group's `canonical_label` is only
@@ -61,7 +75,7 @@ _NAME_TOKEN_RE = re.compile(r"[a-z]{2,}")
 
 # Confidence / method vocabulary, persisted per group.
 HIGH, MEDIUM, LOW = "high", "medium", "low"
-M_EXACT, M_TOKEN, M_MODEL = "exact_match", "formula_token", "model_assisted"
+M_EXACT, M_STRUCT, M_MODEL = "exact_match", "formula_signature", "model_assisted"
 
 
 # ---------------------------------------------------------------------------
@@ -111,37 +125,6 @@ def _is_candidate(row):
 
 
 # ---------------------------------------------------------------------------
-# Union-find.
-# ---------------------------------------------------------------------------
-class _DSU(object):
-    __slots__ = ("parent",)
-
-    def __init__(self, items):
-        # type: (List[str]) -> None
-        self.parent = {x: x for x in items}
-
-    def find(self, x):
-        # type: (str) -> str
-        root = x
-        while self.parent[root] != root:
-            root = self.parent[root]
-        # path compression
-        while self.parent[x] != root:
-            self.parent[x], x = root, self.parent[x]
-        return root
-
-    def union(self, a, b):
-        # type: (str, str) -> None
-        ra, rb = self.find(a), self.find(b)
-        if ra != rb:
-            # deterministic: smaller id becomes the root
-            if ra < rb:
-                self.parent[rb] = ra
-            else:
-                self.parent[ra] = rb
-
-
-# ---------------------------------------------------------------------------
 # Grouping.
 # ---------------------------------------------------------------------------
 def _label_for(members, core_metrics):
@@ -185,79 +168,43 @@ def assign_groups(store, run_id, core_metrics=None, model_pass=False):
     candidates = [r for r in rows if _is_candidate(r)]
     excluded = len(rows) - len(candidates)
 
-    # -- pass 1: exact clusters (identical normalized name OR resolved hash) ---
-    ids = [r["field_id"] for r in candidates]
-    by_id = {r["field_id"]: r for r in candidates}
-    exact = _DSU(ids)
-    name_key = {}  # type: Dict[str, str]
-    hash_key = {}  # type: Dict[str, str]
-    for r in candidates:
-        nk = normalize(r["name"])
-        if nk:
-            if nk in name_key:
-                exact.union(r["field_id"], name_key[nk])
-            else:
-                name_key[nk] = r["field_id"]
-        hk = r.get("normalized_hash") or ""
-        if hk:
-            if hk in hash_key:
-                exact.union(r["field_id"], hash_key[hk])
-            else:
-                hash_key[hk] = r["field_id"]
-    exact_root = {i: exact.find(i) for i in ids}
-
-    # -- pass 2: structural blocking + shared column / name-token linking ------
-    merged = _DSU(ids)
-    for i in ids:
-        merged.union(i, exact_root[i])  # carry pass-1 clusters forward
-    # bucket by structural fingerprint (agg-function set, is-ratio)
-    blocks = {}  # type: Dict[Tuple[frozenset, bool], List[str]]
-    sig_of = {}  # type: Dict[str, Tuple[frozenset, frozenset, bool]]
+    # -- tier 1: exact formula-signature buckets ------------------------------
+    # Each field joins exactly one bucket, keyed by its canonical signature
+    # (agg-function set, base-column set, is-ratio). This is exact-key bucketing,
+    # not transitive linking: a column or token shared with an unrelated field
+    # cannot chain distinct concepts together (see module docstring). Two fields
+    # land together only when they compute the same measure over the same inputs
+    # the same way.
+    buckets = {}  # type: Dict[Tuple[frozenset, bool, frozenset], List[dict]]
     for r in candidates:
         cols, funcs, ratio = _signature(r["resolved_formula"])
-        sig_of[r["field_id"]] = (cols, funcs, ratio)
-        blocks.setdefault((funcs, ratio), []).append(r["field_id"])
-    for key, block_ids in blocks.items():
-        col_index = {}  # type: Dict[str, str]
-        tok_index = {}  # type: Dict[str, str]
-        for fid in block_ids:
-            cols = sig_of[fid][0]
-            for c in cols:
-                if c in col_index:
-                    merged.union(fid, col_index[c])
-                else:
-                    col_index[c] = fid
-            for t in _name_tokens(by_id[fid]["name"]):
-                if t in tok_index:
-                    merged.union(fid, tok_index[t])
-                else:
-                    tok_index[t] = fid
+        buckets.setdefault((funcs, ratio, cols), []).append(r)
 
-    # -- pass 3: model-assisted -- opt-in, off by default ---------------------
+    # -- tier 2: model-assisted -- opt-in, off by default ---------------------
     # No merges performed. Recorded so the run metadata is honest about which
-    # passes ran; the deterministic passes stand as the fallback.
+    # tiers ran; tier 1 stands as the fallback. A future model pass would merge
+    # differently-shaped buckets it judges to be one business metric.
     model_pass_used = bool(model_pass)
 
-    # -- assemble groups -------------------------------------------------------
-    comp = {}  # type: Dict[str, List[dict]]
-    for r in candidates:
-        comp.setdefault(merged.find(r["field_id"]), []).append(r)
-
-    # deterministic group ordering: larger groups first, then by root id
-    ordered_roots = sorted(comp.keys(), key=lambda root: (-len(comp[root]), root))
+    # deterministic group ordering: larger buckets first, then by the smallest
+    # member field_id (stable regardless of scan/iteration order).
+    ordered = sorted(
+        buckets.values(),
+        key=lambda members: (-len(members), min(m["field_id"] for m in members)))
 
     store.clear_groups(run_id)
-    method_counts = {M_EXACT: 0, M_TOKEN: 0}
+    method_counts = {M_EXACT: 0, M_STRUCT: 0}
     groups_out = []  # type: List[dict]
-    for n, root in enumerate(ordered_roots, start=1):
-        members = comp[root]
-        # method: if every member shares one pass-1 exact cluster, the group is
-        # exact/high; if pass 2 fused distinct exact clusters, it is token/medium.
-        distinct_exact = set(exact_root[m["field_id"]] for m in members)
-        if len(distinct_exact) == 1:
+    for n, members in enumerate(ordered, start=1):
+        # A bucket whose members all carry one resolved-formula hash is
+        # identical logic (exact/high); a bucket spanning several hashes is
+        # structurally equivalent but not byte-identical (signature/medium).
+        hashes = set(m.get("normalized_hash") or "" for m in members)
+        hashes.discard("")
+        if len(hashes) <= 1:
             method, confidence = M_EXACT, HIGH
         else:
-            method, confidence = M_TOKEN, MEDIUM
+            method, confidence = M_STRUCT, MEDIUM
         method_counts[method] += 1
         group_id = "grp_%04d" % n
         label = _label_for(members, core_metrics)

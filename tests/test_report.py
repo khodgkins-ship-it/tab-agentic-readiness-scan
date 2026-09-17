@@ -282,17 +282,33 @@ def test_definition_multiplicity_sorts_contested_first(tmp_path):
     _emit("median", tmp_path)
     findings = json.loads((tmp_path / "findings.json").read_text())
     groups = findings["findings"]["definition_multiplicity"]["groups"]
-    labels = [g["label"] for g in groups]
-    # revenue has the most variants (47) but is dominant, so it must NOT lead;
-    # a contested group leads instead (build brief section 6).
-    assert not groups[0]["dominant"]
-    assert labels[-1] == "revenue"
-    rev = next(g for g in groups if g["label"] == "revenue")
-    assert rev["variant_count"] == 47
-    assert rev["dominant"] is True
-    ac = next(g for g in groups if g["label"] == "active_customer")
-    assert ac["variant_count"] == 14
-    assert ac["dominant"] is False
+    # Precision-first grouping fragments each concept into formula-signature
+    # buckets, so a concept like "revenue" now surfaces as several groups -- some
+    # contested, some dominant. The persuading-artifact invariant still holds:
+    # among the multiplicity groups (>=2 variants), a contested group leads and
+    # no dominant group ever does (build brief section 6).
+    multiplicity = [g for g in groups if g["variant_count"] >= 2]
+    assert not multiplicity[0]["dominant"]
+    assert multiplicity[0]["dominance"] == "contested"
+    # The sort is a clean partition: all contested groups precede all dominant
+    # ones (singular groups, variant_count < 2, are not multiplicity findings).
+    rank = {"contested": 0, "dominant": 1}
+    order = [rank[g["dominance"]] for g in multiplicity]
+    assert order == sorted(order)
+
+    # Revenue fragments by definition shape: its identically-shaped
+    # plain-SUM([Sales]) bucket is the largest and is dominant -- and, being
+    # dominant, it does not lead the table.
+    rev_groups = [g for g in multiplicity if g["label"] == "revenue"]
+    assert len(rev_groups) >= 2
+    biggest_rev = max(rev_groups, key=lambda g: g["variant_count"])
+    assert biggest_rev["variant_count"] == 19
+    assert biggest_rev["dominant"] is True
+    assert biggest_rev is not multiplicity[0]
+
+    # active_customer likewise fragments and carries a genuinely contested bucket.
+    ac_groups = [g for g in multiplicity if g["label"] == "active_customer"]
+    assert any(g["dominance"] == "contested" for g in ac_groups)
 
 
 # -- Finding 1 dominance state machine: singular / contested / dominant ------
@@ -336,7 +352,7 @@ class _FakeStore:
     def metric_groups(self, run_id):
         return [{"group_id": gid,
                  "canonical_label": self._groups[gid]["label"],
-                 "method": "formula_token", "confidence": "medium"}
+                 "method": "formula_signature", "confidence": "medium"}
                 for gid in self._order]
 
     def group_variant_detail(self, run_id, gid):

@@ -50,12 +50,17 @@ def _eval_user_context(store, run_id, th):
 
 
 def _eval_variant_count(store, run_id, th):
+    # Detection is per group (one formula-signature bucket). Under precision-first
+    # grouping a concept fragments across several buckets that share a canonical
+    # label, so key the evidence by label and report the largest proliferating
+    # bucket for each -- distinct concept labels, no last-write-wins collision.
     limit = th.get("variant_count_gt", 5)
-    fired = {}
+    fired = {}  # type: Dict[str, int]
     for g in store.metric_groups(run_id):
         n = len(store.metric_variants(run_id, g["group_id"]))
         if n > limit:
-            fired[g["canonical_label"]] = n
+            label = g["canonical_label"]
+            fired[label] = max(fired.get(label, 0), n)
     fires = len(fired) > 0
     evidence = {"threshold": limit, "groups": sorted(fired.keys()),
                 "variant_counts": fired}
@@ -63,14 +68,16 @@ def _eval_variant_count(store, run_id, th):
 
 
 def _eval_no_dominant(store, run_id, th):
+    # Per-group detection (see _eval_variant_count). Several buckets can share a
+    # label, so report distinct concept labels rather than one entry per bucket.
     min_usage = th.get("min_usage_variants", 2)
-    fired = []
+    fired = set()  # type: set
     for g in store.metric_groups(run_id):
         variants = store.metric_variants(run_id, g["group_id"])
         dominant = any(v["is_dominant"] for v in variants)
         usage_variants = sum(1 for v in variants if (v["view_count"] or 0) > 0)
         if (not dominant) and usage_variants >= min_usage:
-            fired.append(g["canonical_label"])
+            fired.add(g["canonical_label"])
     fires = len(fired) > 0
     evidence = {"min_usage_variants": min_usage, "groups": sorted(fired)}
     return fires, len(fired), evidence

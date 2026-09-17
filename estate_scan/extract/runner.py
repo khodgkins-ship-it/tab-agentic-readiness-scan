@@ -206,7 +206,29 @@ class ExtractRunner(object):
                 "upstreamColumns unavailable on this backend)")
 
     # -- usage events --------------------------------------------------------
-    def _run_usage_events(self):
+    def _run_usage_events(self, now=None):
+        # type: (Optional[str]) -> None
+        """Adoption + adoption-depth from per-workbook view events.
+
+        Two sources, chosen by capability. On Tableau Cloud there is no REST
+        endpoint that returns view counts, so when the VizQL Data Service is
+        available we read them from Admin Insights as a read-only grouped
+        aggregate (`_usage_events_via_vds`). Otherwise -- the fixture path, and
+        any site without VDS -- we fall back to the registered REST query
+        (`_usage_events_via_rest`), which self-reports its own availability. Both
+        paths record honest coverage for every outcome; neither ever loads a
+        guess as if it were clean."""
+        if self._capabilities.get("vizql_data_service") \
+                and hasattr(self.client, "admin_insights"):
+            # The VDS path records honest coverage for every outcome (loaded, or
+            # a precise skip). We do NOT fall back to REST when it cannot be used:
+            # on Cloud there is no REST usage endpoint, and a skip-with-reason is
+            # the truthful result -- never a synthetic 501 dressed up as failure.
+            self._usage_events_via_vds(now=now or _now())
+            return
+        self._usage_events_via_rest()
+
+    def _usage_events_via_rest(self):
         # type: () -> None
         if not hasattr(self.client, "rest"):
             self.store.record_coverage(self.run_id, "usage_events", "skipped",
@@ -241,6 +263,69 @@ class ExtractRunner(object):
             self.store.record_coverage(
                 self.run_id, "adoption_depth", "skipped",
                 "usage events carry no per-user identity (aggregate counts only)")
+
+    def _usage_events_via_vds(self, now=None):
+        # type: (Optional[str]) -> None
+        """Read per-workbook view counts from Admin Insights over VDS.
+
+        Every exit records coverage first, so the register is never left blank:
+        either usage loads `ok`, or it is an honest `skipped` with a precise
+        reason (no Admin Insights source, captions that did not resolve, or a VDS
+        error). It never falls through to REST -- on Cloud there is no REST usage
+        endpoint, so a skip-with-reason is the truthful outcome.
+
+        Adoption depth is always `skipped` on this path: Admin Insights is read at
+        per-workbook grain (user_id is None on every mapped row), so per-user
+        penetration cannot be derived -- recorded honestly, never as clean."""
+        from estate_scan.clients.vds import VdsExecutor
+        from estate_scan.extract import usage_vds
+
+        def _skip(reason):
+            self.store.record_coverage(self.run_id, "usage_events", "skipped", reason)
+            self.store.record_coverage(
+                self.run_id, "adoption_depth", "skipped",
+                "usage read at per-workbook grain (no per-user identity)")
+            self._log("usage_events: skipped (%s)" % reason)
+
+        now = now or _now()
+        ai = usage_vds.AdminInsightsConfig.from_config(self.client.admin_insights)
+        luid, note = usage_vds.resolve_datasource_luid(self.store, self.run_id, ai)
+        if luid is None:
+            return _skip("Admin Insights source not resolved: %s" % note)
+
+        executor = VdsExecutor(self.client)
+        body = usage_vds.build_usage_query(executor, luid, ai, now)
+        try:
+            result = self.client.vds_query(body)
+        except Exception as exc:  # transport/guard/HTTP -> honest skip, no garbage
+            return _skip("VDS query raised %s: %s"
+                         % (type(exc).__name__, exc))
+        if not result.ok:
+            return _skip("VDS query failed (status %s) against %s"
+                         % (getattr(result, "status", "?"), note))
+
+        rows = result.data or []
+        if not usage_vds.has_expected_columns(rows, ai):
+            return _skip("Admin Insights result missing expected columns "
+                         "(field captions did not resolve; confirm "
+                         "admin_insights.captions for this site)")
+
+        wb_luid_to_id = self.store.workbook_luid_to_id(self.run_id)
+        mapped, stats = usage_vds.map_rows(rows, ai, wb_luid_to_id, now)
+        self.store.load_usage_events(self.run_id, mapped)
+        self.store.commit()
+        self.store.set_adoption_source(self.run_id, "admin_insights")
+
+        reason = "%d workbooks with views (%s; source %s)" % (
+            stats["matched"], note, ai.datasource_name)
+        if stats["unmatched"]:
+            reason += "; %d view rows for workbooks outside this scan" % stats["unmatched"]
+        self.store.record_coverage(self.run_id, "usage_events", "ok", reason)
+        self.store.record_coverage(
+            self.run_id, "adoption_depth", "skipped",
+            "Admin Insights read at per-workbook grain (no per-user identity)")
+        self._log("usage_events: loaded %d workbook usage rows via VDS/Admin Insights"
+                  % stats["matched"])
 
     # -- refresh / job history -----------------------------------------------
     def _run_refresh_jobs(self):
