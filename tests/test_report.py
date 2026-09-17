@@ -408,7 +408,7 @@ def test_single_variant_concept_is_singular_not_contested():
     assert order[-1] == "solo_metric"
 
 
-def test_singular_concept_renders_as_em_dash_and_no_variant_detail():
+def test_singular_concept_excluded_from_table_and_variant_detail():
     dm = _definition_multiplicity(_four_state_store("ok"), "r")
     findings = {
         "meta": {"build": "working"},
@@ -417,12 +417,17 @@ def test_singular_concept_renders_as_em_dash_and_no_variant_detail():
                      "security_exposure": {}, "retirement": {}},
     }
     md = render_markdown(findings)
+    # The census lede still counts the singular concept "in scope".
     assert "3 metric concept(s) in scope; 2 defined more than once." in md
     # measured run: the contested count is asserted, dominance is not "unmeasured"
     assert "1 of those show no dominant variant (contested)." in md
     assert "unmeasured" not in md
-    # variant detail is only for the multiply-defined concepts -- the singular
-    # one is not adjudicable, so it gets no detail block.
+    # The table lists only multiply-defined concepts; the single-definition one
+    # (no variant to adjudicate) is not a row at all -- it never appears.
+    assert "| split_metric |" in md
+    assert "| won_metric |" in md
+    assert "solo_metric" not in md
+    # variant detail is likewise only for the multiply-defined concepts.
     assert "#### split_metric" in md
     assert "#### won_metric" in md
     assert "#### solo_metric" not in md

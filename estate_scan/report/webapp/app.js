@@ -166,6 +166,12 @@
   function renderDefinitions() {
     var dm = (DATA.findings && DATA.findings.definition_multiplicity) || {};
     var groups = (dm.groups || []).slice();
+    // The table lists only multiply-defined concepts. A single-definition concept
+    // has no variant to adjudicate, so it is not a row (the census lede still
+    // counts it "in scope").
+    var tableGroups = groups.filter(function (g) {
+      return g.multiplicity || (g.variant_count || 0) > 1;
+    });
     addSection("finding-definitions", "Finding 1 · Definition multiplicity",
       function (sec) {
         sec.classList.add("finding");
@@ -204,6 +210,10 @@
         ];
         // Default sort: absence of a dominant variant first (build brief 6),
         // then more disagreement, then more variants.
+        // Only render the table when there is at least one multiply-defined
+        // concept; otherwise the lede alone tells the story ("0 defined more
+        // than once") and an empty grid would be noise.
+        if (tableGroups.length) {
         var sortKey = "_default", sortDir = 1;
         var wrap = el("div", {class: "tbl-wrap"});
         var table = el("table", {class: "grid", id: "dm-table"});
@@ -218,7 +228,7 @@
             a.label.localeCompare(b.label);
         }
         function draw() {
-          var rows = groups.slice();
+          var rows = tableGroups.slice();
           if (sortKey === "_default") rows.sort(defaultCmp);
           else rows.sort(function (a, b) {
             var av = a[sortKey], bv = b[sortKey];
@@ -293,6 +303,7 @@
         sec.appendChild(el("p", {class: "baseline-note", text:
           "Sorted by absence of a dominant variant, not raw variant count: a " +
           "contested concept is the harder adjudication."}));
+        }
       });
   }
 
