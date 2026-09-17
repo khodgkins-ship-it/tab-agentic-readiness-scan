@@ -409,6 +409,15 @@ class LiveClient(EstateClient):
             "api_version": self._api_version,
         }
 
+    @property
+    def admin_insights(self):
+        # type: () -> dict
+        """Admin Insights settings for the VDS usage path. `run_config()` is a
+        curated wire contract, so this optional block is exposed directly off the
+        client for the usage extractor to read (empty dict when unconfigured, so
+        the extractor falls back to documented defaults)."""
+        return dict(self._config.get("admin_insights") or {})
+
     def _note_owner(self, query_name, result):
         # type: (str, GraphQLResult) -> None
         conn_key = _OWNER_QUERIES.get(query_name)

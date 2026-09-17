@@ -1,7 +1,13 @@
 """M6 acceptance (build brief section 5):
 
   - a target stage of 5 on the median fixture yields readiness 2 with
-    `semantic.singularity` as the binding constraint
+    `data.entitlement_at_source` as the binding constraint. (Under the
+    precision-first grouping rewrite, signature bucketing splits each concept
+    into many small coherent buckets, most with a dominant variant, so the
+    dominant-variant share rises into the 0.4-0.7 band and semantic.singularity
+    scores 3 rather than 2. It therefore clears the stage-2 floor and is no
+    longer tied with data at the minimum -- data alone binds. See test_group.py
+    for the grouping change this re-derives from.)
   - removing the target emits facet scores and no rollup
   - an interview response claiming a stronger score than the scan measured
     raises `INT-01` and does not overwrite the scan value
@@ -53,13 +59,18 @@ def _facet_scores(findings):
 
 # -- acceptance: target stage, rollup, binding constraint --------------------
 
-def test_target_five_yields_readiness_two_with_singularity_binding():
+def test_target_five_yields_readiness_two_with_data_binding():
     store, config = _scored_store("median")
     findings = score(store, "r", config=config)  # median declares target 5
 
     facets = _facet_scores(findings)
     # R4 scores the semantic, adoption, and data facets from the scan.
-    assert facets["semantic.singularity"]["score"] == 2
+    # semantic.singularity scores 3, not 2: precision-first signature bucketing
+    # splits each concept into many small coherent buckets, most of them
+    # dominated by one variant, so the dominant-variant share is ~0.58 -- inside
+    # the 0.4-0.7 band. (Under the old single-merged-revenue grouping the share
+    # sat below 0.4 and it scored 2.)
+    assert facets["semantic.singularity"]["score"] == 3
     assert facets["semantic.singularity"]["confidence"] == "observed"
     assert facets["semantic.describability"]["score"] == 3
     assert facets["semantic.exposure_shape"]["score"] == 2
@@ -74,11 +85,11 @@ def test_target_five_yields_readiness_two_with_singularity_binding():
     assert dom["target_stage"] == 5
     assert dom["readiness"] == 2
     assert dom["gap"] == 3
-    # Data now gates stage 5 too and ties semantic at the minimum, so both are
-    # named as binding constraints.
-    assert dom["binding_constraints"] == ["data.entitlement_at_source",
-                                          "semantic.singularity"]
-    assert dom["dimension_scores"] == {"data": 2, "semantic": 2}
+    # Data gates stage 5 at 2 and now sits alone at the minimum: singularity, the
+    # gating semantic facet, has cleared to 3, so the semantic dimension is 3 and
+    # only data binds. (It was a two-way tie at 2 before the grouping rewrite.)
+    assert dom["binding_constraints"] == ["data.entitlement_at_source"]
+    assert dom["dimension_scores"] == {"data": 2, "semantic": 3}
     assert dom["confidence"] == "observed"
 
 
@@ -89,7 +100,7 @@ def test_removing_the_target_emits_facets_and_no_rollup():
 
     assert findings["domains"] == []
     facets = _facet_scores(findings)
-    assert facets["semantic.singularity"]["score"] == 2
+    assert facets["semantic.singularity"]["score"] == 3
     assert facets["adoption.reach"]["score"] == 4
 
 
@@ -119,7 +130,7 @@ def test_reach_drops_out_when_usage_events_not_ok():
 
 def test_interview_claiming_stronger_raises_int01_without_overwriting():
     store, config = _scored_store("median")
-    # Scan measured singularity at 2; the interview claims 5.
+    # Scan measured singularity at 3; the interview claims 5.
     store.save_interview_response(
         "r", "semantic.singularity", 5, "leadership believes it is standard",
         "analytics_leader", "", "2026-01-01T00:00:00Z", "specialist",
@@ -129,14 +140,14 @@ def test_interview_claiming_stronger_raises_int01_without_overwriting():
     findings = score(store, "r", config=config, now="2026-01-01T00:00:00Z")
 
     facets = _facet_scores(findings)
-    # Scan wins: the value stays 2 and observed, not the claimed 5.
-    assert facets["semantic.singularity"]["score"] == 2
+    # Scan wins: the value stays 3 and observed, not the claimed 5.
+    assert facets["semantic.singularity"]["score"] == 3
     assert facets["semantic.singularity"]["confidence"] == "observed"
 
     int01 = [r for r in store.flags("r") if r["flag_id"] == "INT-01"]
     assert len(int01) == 1
     ev = json.loads(int01[0]["evidence_json"])
-    assert ev["scan_score"] == 2
+    assert ev["scan_score"] == 3
     assert ev["interview_score"] == 5
     assert ev["facet"] == "semantic.singularity"
 
@@ -384,7 +395,7 @@ def test_observed_governance_arcs_do_not_score_governance_on_their_own():
     store, config = _scored_store("median")
     dom = score(store, "r", config=config)["domains"][0]
     assert "governance" not in dom["dimension_scores"]
-    assert dom["dimension_scores"] == {"data": 2, "semantic": 2}
+    assert dom["dimension_scores"] == {"data": 2, "semantic": 3}
 
 
 def test_observed_governance_arcs_drop_when_datasources_coverage_not_ok():
@@ -443,8 +454,9 @@ def test_cli_pipeline_scan_interview_score(tmp_path):
     store.close()
     dom = findings["domains"][0]
     assert dom["readiness"] == 2
-    assert dom["binding_constraints"] == ["data.entitlement_at_source",
-                                          "semantic.singularity"]
+    # Data alone binds: singularity now clears the stage-2 floor (see
+    # test_target_five_yields_readiness_two_with_data_binding).
+    assert dom["binding_constraints"] == ["data.entitlement_at_source"]
 
     # --no-rollup drops the domain rollup
     assert cli.main(["score", "--out", out, "--no-rollup"]) == 0

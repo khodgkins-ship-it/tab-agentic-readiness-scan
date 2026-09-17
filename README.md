@@ -75,6 +75,8 @@ The live path is read-only, enforced in code, and needs a **read-only Personal A
    estate_scan scan --config live-config.yaml --live --out out/live
    ```
 
+   On Tableau Cloud there is no REST endpoint for per-workbook view counts, so the scan sources adoption from the Tableau-managed **Admin Insights** published data source, read through the read-only VizQL Data Service as a grouped aggregate (one row per workbook: its view count and last-viewed date over a trailing window). This is automatic when the site has the service enabled — no extra step. Because Tableau localises and revises the Admin Insights schema, **confirm the field captions on your first live run**: if they don't resolve, usage is recorded as *unmeasured* with a reason (never guessed), and you set the right names under the optional `admin_insights:` block in the config and re-run. A site without the VizQL Data Service simply reports usage as unmeasured.
+
 5. Capture the specialist judgments no API can see (declared target stage, governance posture) in a YAML responses file — see `02-assessment-methodology.md` for the interview protocol — then load them, score, and emit the report:
 
    ```bash

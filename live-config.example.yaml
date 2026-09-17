@@ -19,6 +19,28 @@ deployment_type: cloud                        # cloud | server
 
 pat_name: estate-scan-readonly                # the PAT's NAME (non-secret label); the secret goes in the env var
 
+# Cloud usage (adoption) source. On Tableau Cloud there is no REST endpoint for
+# per-workbook view counts, so the scan reads them from the Tableau-managed
+# Admin Insights published data source through the read-only VizQL Data Service
+# (a grouped aggregate: one row per workbook, its view count and last-viewed
+# date over a trailing window). This whole block is OPTIONAL -- omit it and the
+# documented defaults below are used. It only takes effect when the site has the
+# VizQL Data Service enabled; without it, usage is recorded as unmeasured (never
+# guessed). CONFIRM the field captions on your FIRST live run: Tableau localises
+# and revises the Admin Insights schema, so the defaults may not match your site.
+# If the captions do not resolve, usage is skipped with a reason (never wrong
+# data) -- read the coverage note, then set the right captions here and re-run.
+# admin_insights:
+#   project_name: "Admin Insights"              # the project the managed source lives in
+#   datasource_name: "Admin Insights Starter"   # the published data source to query
+#   # datasource_luid: "..."                     # optional: query this luid directly, skip name lookup
+#   window_days: 90                             # trailing window for the view count
+#   captions:                                   # Admin Insights field names (confirm on first run)
+#     workbook_luid: "Item LUID"                #   the viewed item's luid (joins the scanned workbooks)
+#     event_type: "Event Type Name"             #   the event-type field to filter on
+#     view_event_value: "Access View"           #   the event-type value that counts as a view
+#     event_date: "Event Date"                  #   the event timestamp (date grain)
+
 # api_version: "3.24"                          # optional: pin the REST API version; omitted = negotiated per host
 # timeout_seconds: 60
 # session_refresh_seconds: 3000

@@ -23,7 +23,7 @@ material -- that lives in `derive/disagreement.py`. It only builds bodies, issue
 them through the guarded session, and reports whether the service is available.
 """
 
-from typing import Optional
+from typing import List, Optional
 
 from estate_scan.clients.base import VdsResult
 
@@ -65,4 +65,58 @@ class VdsExecutor(object):
         the figure via `result.value(field_caption)`."""
         body = self.build_query_body(datasource_luid, field_caption, function,
                                      period_field, period_value)
+        return self._client.vds_query(body)
+
+    # -- grouped reads (R2 usage extraction) ---------------------------------
+    # The single-measure builder above is enough for material disagreement (one
+    # aggregate per variant). Usage extraction needs a *grouped* aggregate: one
+    # row per workbook carrying its view count and last-viewed date. That is
+    # still a read -- dimensions + aggregated measures + filters -- so it passes
+    # `assert_vds_body_read_only` by the same construction (only fields/filters
+    # under query; the guard never inspects a field's function or a filter's
+    # predicate, so multiple measures and a date-range filter are admitted).
+
+    @staticmethod
+    def build_grouped_query(datasource_luid, dimensions, measures, filters=None):
+        # type: (str, List[str], List[tuple], Optional[List[dict]]) -> dict
+        """Build a read-only grouped aggregate body.
+
+        `dimensions` are field captions returned raw (the GROUP BY). `measures`
+        are ``(caption, function, alias)`` triples; the alias names the output
+        column so two aggregates of the *same* field (e.g. COUNT and MAX of the
+        event timestamp) do not collide on one key. `filters` are prebuilt
+        read-only filter objects (see `match_filter`/`since_date_filter`)."""
+        fields = [{"fieldCaption": c} for c in dimensions]
+        for caption, function, alias in measures:
+            spec = {"fieldCaption": caption, "function": function}
+            if alias:
+                spec["fieldAlias"] = alias
+            fields.append(spec)
+        query = {"fields": fields}
+        if filters:
+            query["filters"] = list(filters)
+        return {"datasource": {"datasourceLuid": datasource_luid}, "query": query}
+
+    @staticmethod
+    def match_filter(field_caption, values):
+        # type: (str, List[str]) -> dict
+        """A categorical (SET) filter: keep rows whose field is in `values`."""
+        return {"field": {"fieldCaption": field_caption},
+                "filterType": "SET", "values": list(values)}
+
+    @staticmethod
+    def since_date_filter(field_caption, min_date):
+        # type: (str, str) -> dict
+        """A one-sided date-range filter: keep rows at or after `min_date`
+        (ISO date). Bounds the window so the read never pulls the full history."""
+        return {"field": {"fieldCaption": field_caption},
+                "filterType": "QUANTITATIVE_DATE",
+                "quantitativeFilterType": "MIN", "minDate": min_date}
+
+    def execute_grouped(self, datasource_luid, dimensions, measures, filters=None):
+        # type: (str, List[str], List[tuple], Optional[List[dict]]) -> VdsResult
+        """Issue one grouped read and return the raw `VdsResult`; the caller reads
+        `result.data` (a list of rows keyed by caption/alias)."""
+        body = self.build_grouped_query(datasource_luid, dimensions, measures,
+                                        filters)
         return self._client.vds_query(body)
