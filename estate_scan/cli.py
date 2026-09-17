@@ -378,47 +378,6 @@ def cmd_calibrate(args):
     return 0
 
 
-# -- compare -----------------------------------------------------------------
-
-def cmd_compare(args):
-    # type: (argparse.Namespace) -> int
-    """Compare two runs of one account over time -- the "why did this number
-    move" question the versioned query set exists to answer. Reads the two
-    findings.json artifacts directly (each `scan`/`report` writes its own into a
-    separate out-dir), so it needs no store and never connects anywhere."""
-    from estate_scan.report.compare import (compare_runs,
-                                            render_comparison_markdown)
-    baseline = _load_findings(args.baseline)
-    current = _load_findings(args.current)
-    delta = compare_runs(baseline, current)
-    md = render_comparison_markdown(delta)
-
-    if args.out:
-        if not os.path.isdir(args.out):
-            os.makedirs(args.out)
-        out_path = os.path.join(args.out, "comparison.md")
-        with open(out_path, "w", encoding="utf-8") as fh:
-            fh.write(md)
-        print("compare: wrote %s" % out_path)
-        if not delta["comparable"]:
-            for w in delta["warnings"]:
-                print("  warning: %s" % w)
-    else:
-        sys.stdout.write(md)
-    return 0
-
-
-def _load_findings(path):
-    # type: (str) -> dict
-    """Accept either a findings.json file or an out-dir containing one."""
-    if os.path.isdir(path):
-        path = os.path.join(path, "findings.json")
-    if not os.path.exists(path):
-        raise SystemExit("no findings.json at %s; run `report` first" % path)
-    with open(path, "r", encoding="utf-8") as fh:
-        return json.load(fh)
-
-
 # -- argument parsing --------------------------------------------------------
 
 def build_parser():
@@ -514,20 +473,6 @@ def build_parser():
                        help="print the report to stdout instead of writing "
                             "calibration.md into --out")
     p_cal.set_defaults(func=cmd_calibrate)
-
-    p_compare = sub.add_parser(
-        "compare",
-        help="compare two runs of one account over time (reads two "
-             "findings.json artifacts; offline, connects nowhere)")
-    p_compare.add_argument("--baseline", required=True,
-                           help="the earlier run's findings.json (or its "
-                                "out-dir)")
-    p_compare.add_argument("--current", required=True,
-                           help="the later run's findings.json (or its out-dir)")
-    p_compare.add_argument("--out",
-                           help="write comparison.md here; without it, the "
-                                "comparison prints to stdout")
-    p_compare.set_defaults(func=cmd_compare)
 
     return parser
 

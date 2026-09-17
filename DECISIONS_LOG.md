@@ -34,12 +34,6 @@ later scope reversals, and (c) committing the current in-flight changes.
 
 ### Cleanup created by later scope reversals
 
-- **Multi-run / cross-run comparison — decide whether to retire it.** R5 built
-  `estate_scan/report/compare.py` (`compare_runs`, `render_comparison_markdown`).
-  A later decision ruled the tool **single-snapshot only** (point-in-time
-  assessment, not change tracking). Open decision: remove/retire that module and
-  any surfacing of it, or leave it dormant. Do **not** invest further in
-  cross-run features. (See memory: scope-no-cross-run-no-corrective.)
 - **R6 upstream contributions — likely moot.** R6 committed upstream contribution
   notes (`44aef13`), prepared but unopened. The user has since handled the
   tableau-metadata-explorer feedback manually and wants the contribution work
@@ -130,8 +124,9 @@ later scope reversals, and (c) committing the current in-flight changes.
 | R6 | `f4d4f7b`, `9a0b09d`, `44aef13` | Guarded live-smoke path, calibration harness, upstream contribution notes* |
 
 \* R5's multi-run comparison and R6's upstream contribution notes were built, then
-superseded by later scope decisions (see §1, "Cleanup created by later scope
-reversals").
+superseded by later scope decisions. The comparison module has since been removed
+(see "Work completed recently"); R6's contribution notes remain to be dropped (see
+§1, "Cleanup created by later scope reversals").
 
 ### Later scope decisions (post-milestone)
 
@@ -143,7 +138,16 @@ reversals").
 - **No upstream contributions** — the tableau-metadata-explorer feedback was
   handled manually; the R6 contribution work is dropped.
 
-### Work completed this session (uncommitted)
+### Work completed recently
+
+- **Multi-run / cross-run comparison removed.** Acting on the single-snapshot
+  decision, `estate_scan/report/compare.py` (`compare_runs`,
+  `render_comparison_markdown`), its `compare` CLI subcommand, and the R5
+  comparison tests were deleted; the README command list and this log were
+  updated to match. The tool now offers no cross-run diff. The design still
+  appears in the historical spec docs (`03-tooling-build-spec.md §12`), which are
+  left as a record of the reversed decision. (See memory:
+  scope-no-cross-run-no-corrective.)
 
 - **Internal codes replaced with human-readable names across all output assets.**
   Facet/flag/dimension codes (`SEM-03`, `DF-01`, `semantic.describability`,
