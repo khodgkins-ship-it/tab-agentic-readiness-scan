@@ -132,17 +132,20 @@ def _finding_definitions(a, findings, build):
     # counts it "in scope").
     table_groups = [g for g in groups if g.get("multiplicity")]
     if table_groups:
-        a("| Metric | Variants | Workbooks | Disagreeing | Cover 80% | Dominant |")
-        a("|---|--:|--:|--:|--:|:--:|")
+        a("| Metric | Definitions | Fields | Workbooks | Disagreeing | Cover 80% | Dominant |")
+        a("|---|--:|--:|--:|--:|--:|:--:|")
         for g in table_groups:
-            a("| %s | %d | %d | %d | %d | %s |"
-              % (g["label"], g["variant_count"], g["workbooks_affected"],
-                 g["disagreeing_variants"], g["variants_covering_80pct_views"],
+            a("| %s | %d | %d | %d | %d | %d | %s |"
+              % (g["label"], g["definition_count"], g["variant_count"],
+                 g["workbooks_affected"], g["disagreeing_variants"],
+                 g["variants_covering_80pct_views"],
                  _DOMINANCE_CELL.get(g.get("dominance"),
                                      "yes" if g.get("dominant") else "**no**")))
         a("")
         a("_Only multiply-defined concepts are listed; a single-definition concept "
-          "has no variant to adjudicate. Sorted so a contested concept — the "
+          "has nothing to adjudicate. \"Definitions\" is the number of distinct "
+          "formulas for the concept (\"defined N ways\"); \"Fields\" is how many "
+          "calculated fields carry them. Sorted so a contested concept — the "
           "harder adjudication — leads._")
         a("")
     if build == "working":

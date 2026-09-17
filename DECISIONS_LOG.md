@@ -200,3 +200,49 @@ superseded by later scope decisions. The comparison module has since been remove
     signature-coherent groups, largest bucket 343 identically-shaped members — no
     catastrophic chaining; all 3,589 groups pass the coherence invariant. Full
     suite green (261 passing).
+
+- **Concept-level grouping layered on top of signature bucketing.** Signature
+  bucketing alone surfaced the *same* metric name as many table rows — "revenue"
+  appeared five times, once per formula shape — which reads as noise, not a
+  finding. **Decision (user, "Concept-level grouping"): fold a metric's
+  signature buckets into ONE concept row "defined N ways".** A definition is a
+  formula signature (user's "Formula signature" choice), so "defined N ways" =
+  count of distinct `definition_key` within the concept.
+  - **Fold key stays a declared core-metric label, never formula meaning.**
+    Buckets merge only when they carry the same confident declared core-metric
+    label (`_label_for` → `is_core`); a bucket that falls back to an observed
+    field name never merges. So "Revenue"/"Total Revenue" fold into `revenue`,
+    but differently-*named* revenue-shaped fields ("Net Rev", "Rev USD") stay
+    their own concepts — the tool still never authors or infers a definition (THE
+    HARD RULE). This preserves the anti-chaining guarantee: the only merge key is
+    a curated, human-supplied name.
+  - **Dominance is now a definition-level decision** (rank.py): views aggregate by
+    `definition_key`, dominance is decided over those totals, and `is_dominant` is
+    stamped on the single top field of the winning definition. This sees through
+    field fragmentation — a definition computed by twenty low-view fields is still
+    recognised as one settled definition.
+  - **Multiplicity table shows only multiply-defined concepts.** A concept with
+    one definition is `singular` (nothing to adjudicate) and drops out of the
+    table entirely — fixes the earlier bug where variant-count-1 rows appeared.
+  - **Downstream re-derivation on the median fixture.** 12 concepts (5 core +
+    7 single-definition solo groups). SEM-01 now fires on all five core metrics
+    (concept field-count > 5) — matching the planted ground truth exactly, no
+    longer under-reporting. SEM-02 fires on the three genuinely contested concepts
+    (active_customer, average_order_value, churn_rate); revenue and gross_margin
+    have a dominant definition and do not. `revenue` reads "defined 7 ways across
+    44 fields, dominant". The dominant-**definition** share is **0.750** (9 of 12
+    concepts dominant, replacing the prior 0.583) → `semantic.singularity` still
+    scores 3 and `revenue_ops` still binds on `data.entitlement_at_source` alone.
+  - **Band-3 dead-zone fix (logic fix, not fixture tuning).** `semantic.singularity`
+    band 3 changed from the closed range `"0.4 - 0.7"` to the open `">= 0.4"`. The
+    closed band left a dead zone: a share above 0.7 that has *not* demonstrated
+    deprecation (band 4's governance gate, which the scan cannot observe) satisfied
+    no band and floored to 1 — an estate that has largely settled its definitions
+    scored *worse* than one at 0.5. Stage 3 is exactly "most metrics have a
+    dominant definition but deprecation of the losers is not demonstrated", so
+    `>= 0.4` with no governance evidence belongs in band 3; 4+ stay gated on the
+    demonstrated-governance booleans. Not tuned to the fixture — the fix is correct
+    for any share in the (0.7, 1.0] range under scan-only evidence. Test
+    expectations across `test_group.py`, `test_flags.py`, `test_report.py`,
+    `test_score.py`, and the median manifest re-derived to the concept-level
+    output; full suite green (258 passing).

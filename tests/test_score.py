@@ -1,13 +1,14 @@
 """M6 acceptance (build brief section 5):
 
   - a target stage of 5 on the median fixture yields readiness 2 with
-    `data.entitlement_at_source` as the binding constraint. (Under the
-    precision-first grouping rewrite, signature bucketing splits each concept
-    into many small coherent buckets, most with a dominant variant, so the
-    dominant-variant share rises into the 0.4-0.7 band and semantic.singularity
-    scores 3 rather than 2. It therefore clears the stage-2 floor and is no
-    longer tied with data at the minimum -- data alone binds. See test_group.py
-    for the grouping change this re-derives from.)
+    `data.entitlement_at_source` as the binding constraint. (Under concept-level
+    grouping each core metric is one concept "defined N ways"; dominance is a
+    definition-level decision, and most concepts -- plus every single-definition
+    solo group -- have a dominant definition, so the dominant-definition share is
+    0.75, inside the open >= 0.4 band, and semantic.singularity scores 3 rather
+    than 2. It therefore clears the stage-2 floor and is no longer tied with data
+    at the minimum -- data alone binds. See test_group.py for the grouping change
+    this re-derives from.)
   - removing the target emits facet scores and no rollup
   - an interview response claiming a stronger score than the scan measured
     raises `INT-01` and does not overwrite the scan value
@@ -65,11 +66,11 @@ def test_target_five_yields_readiness_two_with_data_binding():
 
     facets = _facet_scores(findings)
     # R4 scores the semantic, adoption, and data facets from the scan.
-    # semantic.singularity scores 3, not 2: precision-first signature bucketing
-    # splits each concept into many small coherent buckets, most of them
-    # dominated by one variant, so the dominant-variant share is ~0.58 -- inside
-    # the 0.4-0.7 band. (Under the old single-merged-revenue grouping the share
-    # sat below 0.4 and it scored 2.)
+    # semantic.singularity scores 3, not 2: with concept-level grouping the
+    # dominant-definition share is 0.75 (9 of 12 concepts have a dominant
+    # definition -- revenue, gross_margin, and the seven single-definition solo
+    # groups), which sits in the open >= 0.4 band. 4+ stay gated on the
+    # demonstrated-deprecation booleans the scan cannot see.
     assert facets["semantic.singularity"]["score"] == 3
     assert facets["semantic.singularity"]["confidence"] == "observed"
     assert facets["semantic.describability"]["score"] == 3

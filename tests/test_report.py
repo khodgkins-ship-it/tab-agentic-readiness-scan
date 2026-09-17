@@ -280,33 +280,36 @@ def test_definition_multiplicity_sorts_contested_first(tmp_path):
     _emit("median", tmp_path)
     findings = json.loads((tmp_path / "findings.json").read_text())
     groups = findings["findings"]["definition_multiplicity"]["groups"]
-    # Precision-first grouping fragments each concept into formula-signature
-    # buckets, so a concept like "revenue" now surfaces as several groups -- some
-    # contested, some dominant. The persuading-artifact invariant still holds:
-    # among the multiplicity groups (>=2 variants), a contested group leads and
-    # no dominant group ever does (build brief section 6).
-    multiplicity = [g for g in groups if g["variant_count"] >= 2]
-    assert not multiplicity[0]["dominant"]
+    # Concept-level grouping: each core metric is ONE row -- "defined N ways" --
+    # not one row per formula shape. The multiplicity findings are the concepts
+    # carrying >=2 definitions. The persuading-artifact invariant holds: a
+    # contested concept (no dominant definition) leads and no dominant one does
+    # (build brief section 6).
+    multiplicity = [g for g in groups if g["multiplicity"]]
     assert multiplicity[0]["dominance"] == "contested"
-    # The sort is a clean partition: all contested groups precede all dominant
-    # ones (singular groups, variant_count < 2, are not multiplicity findings).
+    assert not multiplicity[0]["dominant"]
+    # The sort is a clean partition: all contested concepts precede all dominant
+    # ones (singular concepts, one definition, are not multiplicity findings).
     rank = {"contested": 0, "dominant": 1}
     order = [rank[g["dominance"]] for g in multiplicity]
     assert order == sorted(order)
 
-    # Revenue fragments by definition shape: its identically-shaped
-    # plain-SUM([Sales]) bucket is the largest and is dominant -- and, being
-    # dominant, it does not lead the table.
+    # Revenue is a SINGLE concept, defined seven ways across 44 fields. Usage has
+    # settled on one definition, so the concept is dominant -- and, being
+    # dominant, it never leads the table.
     rev_groups = [g for g in multiplicity if g["label"] == "revenue"]
-    assert len(rev_groups) >= 2
-    biggest_rev = max(rev_groups, key=lambda g: g["variant_count"])
-    assert biggest_rev["variant_count"] == 19
-    assert biggest_rev["dominant"] is True
-    assert biggest_rev is not multiplicity[0]
+    assert len(rev_groups) == 1
+    rev = rev_groups[0]
+    assert rev["definition_count"] == 7
+    assert rev["variant_count"] == 44
+    assert rev["dominance"] == "dominant"
+    assert rev is not multiplicity[0]
 
-    # active_customer likewise fragments and carries a genuinely contested bucket.
+    # active_customer is a SINGLE contested concept: several definitions, none
+    # settled -- the governance problem the backlog surfaces first.
     ac_groups = [g for g in multiplicity if g["label"] == "active_customer"]
-    assert any(g["dominance"] == "contested" for g in ac_groups)
+    assert len(ac_groups) == 1
+    assert ac_groups[0]["dominance"] == "contested"
 
 
 # -- Finding 1 dominance state machine: singular / contested / dominant ------
@@ -323,8 +326,11 @@ def _variant_row(field_id, name, views, is_dominant, rank,
         "field_name": name,
         "view_count": views,
         "workbook_count": 1,
-        # distinct definitions -> the group reads as genuinely disagreeing
+        # distinct definitions -> the group reads as genuinely disagreeing.
+        # definition_key is what multiplicity/dominance is decided over now; one
+        # per field here so each field is its own definition.
         "normalized_hash": "h_%s" % field_id,
+        "definition_key": "d_%s" % field_id,
         "is_dominant": is_dominant,
         "usage_rank": rank,
         "resolution_status": "resolved",

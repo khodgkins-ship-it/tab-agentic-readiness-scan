@@ -115,8 +115,7 @@
       "groups": [
         "active_customer",
         "average_order_value",
-        "churn_rate",
-        "gross_margin"
+        "churn_rate"
       ]
     },
     "SEM-03": {

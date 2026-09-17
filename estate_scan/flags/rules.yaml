@@ -338,10 +338,18 @@ facets:
     dimension: semantic
     evidence: observed
     scored: true
-    measure: dominant_variant_share    # share of scoped core metrics with a dominant variant
+    measure: dominant_variant_share    # share of scoped core metrics with a dominant definition
+    # Band 3 is open at the top (>= 0.4), not a closed 0.4-0.7 range. A closed
+    # band left a dead zone: a share above 0.7 that has NOT demonstrated
+    # deprecation (band 4's governance gate) satisfied no band and floored to 1 --
+    # i.e. an estate that has largely settled its definitions but not yet proven
+    # it retired the losers scored WORSE than one at 0.5. Stage 3 is exactly "most
+    # metrics have a dominant definition, but the estate has not demonstrated it
+    # deprecated the alternatives", so >= 0.4 with no governance evidence belongs
+    # in band 3; 4+ stay gated on the demonstrated-governance booleans.
     bands:
       2: "< 0.4"
-      3: "0.4 - 0.7"
+      3: ">= 0.4"
       4: "> 0.7 and duplicates_deprecated == true"
       5: "> 0.7 and duplicates_deprecated == true and ratified == true"
       6: "estate_wide == true"

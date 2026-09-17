@@ -99,6 +99,19 @@ def _signature(resolved_formula):
     return cols, funcs, has_ratio
 
 
+def _sig_key(cols, funcs, has_ratio):
+    # type: (frozenset, frozenset, bool) -> str
+    """A stable string form of a signature -- the unit of *one definition*.
+
+    Two fields share a definition_key exactly when they share a signature: same
+    aggregation functions over the same base columns, ratio or not. Within a
+    concept group, the count of distinct definition_keys is "defined N ways", and
+    rank.py decides dominance over these keys (not over individual fields), so a
+    definition split across many fields is still recognised as one definition."""
+    return "funcs=%s|ratio=%d|cols=%s" % (
+        ",".join(sorted(funcs)), int(has_ratio), ",".join(sorted(cols)))
+
+
 def _name_tokens(name):
     # type: (Optional[str]) -> frozenset
     return frozenset(_NAME_TOKEN_RE.findall((name or "").lower()))
@@ -128,10 +141,15 @@ def _is_candidate(row):
 # Grouping.
 # ---------------------------------------------------------------------------
 def _label_for(members, core_metrics):
-    # type: (List[dict], List[str]) -> str
-    """Choose a group label: the declared core metric whose tokens best match
-    the members' names, else the member name carrying the most usage. Never a
-    synthesized definition."""
+    # type: (List[dict], List[str]) -> Tuple[str, bool]
+    """Choose a group label and say whether it is a confident core-metric match.
+
+    Returns (label, is_core). `is_core` is True only when a declared core metric
+    matched the members' names outright -- that is the ONLY label safe to merge
+    signature buckets on (see assign_groups). A fallback label is an observed
+    field name and is never a merge key, so two buckets that both fell back to
+    the same generic name (e.g. "Total") are never fused. Never a synthesized
+    definition (THE HARD RULE)."""
     name_tokens = set()
     for m in members:
         name_tokens |= _name_tokens(m["name"])
@@ -144,10 +162,10 @@ def _label_for(members, core_metrics):
         elif score == best_score and score > 0 and best_metric is not None:
             best_metric = None  # tie -> no confident metric label
     if best_metric is not None and best_score > 0:
-        return best_metric
+        return best_metric, True
     # Fallback: the highest-usage variant's own name (observed, not authored).
     ranked = sorted(members, key=lambda m: (-m.get("_views", 0), m["field_id"]))
-    return ranked[0]["name"] if ranked else ""
+    return (ranked[0]["name"] if ranked else ""), False
 
 
 def assign_groups(store, run_id, core_metrics=None, model_pass=False):
@@ -168,37 +186,62 @@ def assign_groups(store, run_id, core_metrics=None, model_pass=False):
     candidates = [r for r in rows if _is_candidate(r)]
     excluded = len(rows) - len(candidates)
 
-    # -- tier 1: exact formula-signature buckets ------------------------------
+    # -- step 1: exact formula-signature buckets ------------------------------
     # Each field joins exactly one bucket, keyed by its canonical signature
     # (agg-function set, base-column set, is-ratio). This is exact-key bucketing,
     # not transitive linking: a column or token shared with an unrelated field
     # cannot chain distinct concepts together (see module docstring). Two fields
     # land together only when they compute the same measure over the same inputs
-    # the same way.
+    # the same way. A bucket is one *definition*.
     buckets = {}  # type: Dict[Tuple[frozenset, bool, frozenset], List[dict]]
     for r in candidates:
         cols, funcs, ratio = _signature(r["resolved_formula"])
+        r["_defkey"] = _sig_key(cols, funcs, ratio)
         buckets.setdefault((funcs, ratio, cols), []).append(r)
+
+    # -- step 2: fold definitions into concepts -------------------------------
+    # A business metric is defined more than once when several definitions carry
+    # the SAME declared core-metric label. Those buckets fold into one concept
+    # group so "revenue defined seven ways" is one row, not seven. The fold key
+    # is ONLY a confident core-metric label (_label_for's is_core): a curated,
+    # human-declared name, so folding can never chain unrelated fields the way
+    # the old union-find did (see module docstring). A bucket that falls back to
+    # an observed field name stays its own concept, keyed by its signature, so
+    # two unrelated buckets that happen to share a generic fallback name are
+    # never fused. Multiplicity is thus measured at the concept level while the
+    # precision of signature bucketing is preserved underneath.
+    concepts = {}  # type: Dict[object, dict]
+    for key, members in buckets.items():
+        label, is_core = _label_for(members, core_metrics)
+        ckey = ("core", label) if is_core else ("solo", key)
+        c = concepts.get(ckey)
+        if c is None:
+            concepts[ckey] = {"label": label, "members": list(members)}
+        else:
+            c["members"].extend(members)
 
     # -- tier 2: model-assisted -- opt-in, off by default ---------------------
     # No merges performed. Recorded so the run metadata is honest about which
-    # tiers ran; tier 1 stands as the fallback. A future model pass would merge
-    # differently-shaped buckets it judges to be one business metric.
+    # tiers ran; step 1 + the core-metric fold stand as the deterministic
+    # backbone. A future model pass would merge differently-shaped concepts it
+    # judges to be one business metric even without a shared declared label.
     model_pass_used = bool(model_pass)
 
-    # deterministic group ordering: larger buckets first, then by the smallest
+    # deterministic group ordering: larger concepts first, then by the smallest
     # member field_id (stable regardless of scan/iteration order).
     ordered = sorted(
-        buckets.values(),
-        key=lambda members: (-len(members), min(m["field_id"] for m in members)))
+        concepts.values(),
+        key=lambda c: (-len(c["members"]), min(m["field_id"] for m in c["members"])))
 
     store.clear_groups(run_id)
     method_counts = {M_EXACT: 0, M_STRUCT: 0}
     groups_out = []  # type: List[dict]
-    for n, members in enumerate(ordered, start=1):
-        # A bucket whose members all carry one resolved-formula hash is
-        # identical logic (exact/high); a bucket spanning several hashes is
-        # structurally equivalent but not byte-identical (signature/medium).
+    for n, concept in enumerate(ordered, start=1):
+        members = concept["members"]
+        # A concept whose members all carry one resolved-formula hash is
+        # identical logic (exact/high); one spanning several hashes -- always the
+        # case once two definitions fold together -- is structurally equivalent
+        # but not byte-identical (signature/medium).
         hashes = set(m.get("normalized_hash") or "" for m in members)
         hashes.discard("")
         if len(hashes) <= 1:
@@ -207,15 +250,16 @@ def assign_groups(store, run_id, core_metrics=None, model_pass=False):
             method, confidence = M_STRUCT, MEDIUM
         method_counts[method] += 1
         group_id = "grp_%04d" % n
-        label = _label_for(members, core_metrics)
+        label = concept["label"]
+        definitions = len(set(m["_defkey"] for m in members))
         store.save_metric_group(run_id, group_id, label, confidence, method)
         for m in members:
             store.save_metric_variant(
                 run_id, group_id, m["field_id"], m.get("normalized_hash") or "",
-                None, 0, 0, 0)
+                m["_defkey"], None, 0, 0, 0)
         groups_out.append({"group_id": group_id, "label": label,
-                           "size": len(members), "method": method,
-                           "confidence": confidence})
+                           "size": len(members), "definitions": definitions,
+                           "method": method, "confidence": confidence})
 
     store.commit()
     return {

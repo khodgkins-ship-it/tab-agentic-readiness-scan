@@ -490,14 +490,16 @@ class Store(object):
             (run_id, group_id, canonical_label, confidence, method))
 
     def save_metric_variant(self, run_id, group_id, field_id, normalized_hash,
-                            usage_rank, view_count, workbook_count, is_dominant):
-        # type: (str, str, str, str, Optional[int], int, int, int) -> None
+                            definition_key, usage_rank, view_count,
+                            workbook_count, is_dominant):
+        # type: (str, str, str, str, str, Optional[int], int, int, int) -> None
         self.conn.execute(
             "INSERT OR REPLACE INTO metric_variants "
-            "(run_id, group_id, field_id, normalized_hash, usage_rank, "
-            " view_count, workbook_count, is_dominant) VALUES (?,?,?,?,?,?,?,?)",
-            (run_id, group_id, field_id, normalized_hash, usage_rank,
-             view_count, workbook_count, _b(is_dominant)))
+            "(run_id, group_id, field_id, normalized_hash, definition_key, "
+            " usage_rank, view_count, workbook_count, is_dominant) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (run_id, group_id, field_id, normalized_hash, definition_key,
+             usage_rank, view_count, workbook_count, _b(is_dominant)))
 
     def update_variant_usage(self, run_id, group_id, field_id, usage_rank,
                              view_count, workbook_count, is_dominant):
@@ -1034,6 +1036,7 @@ class Store(object):
             "       mv.workbook_count AS workbook_count, "
             "       mv.is_dominant AS is_dominant, "
             "       mv.normalized_hash AS normalized_hash, "
+            "       mv.definition_key AS definition_key, "
             "       rf.resolved_formula AS resolved_formula, "
             "       rf.resolution_status AS resolution_status, "
             "       ds.name AS datasource_name, ds.owner AS owner "
