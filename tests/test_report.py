@@ -13,7 +13,6 @@
   - the pre-emit secret scan aborts the whole emit on a hit rather than warning
 """
 
-import copy
 import json
 import os
 import re
@@ -28,7 +27,6 @@ from estate_scan.derive.resolve import resolve_all
 from estate_scan.extract.runner import ExtractRunner
 from estate_scan.flags.engine import evaluate_flags
 from estate_scan.report import emit
-from estate_scan.report.compare import compare_runs, render_comparison_markdown
 from estate_scan.report.emit import emit_all
 from estate_scan.report.findings import _definition_multiplicity, build_findings
 from estate_scan.report.labels import dimension_name, facet_name
@@ -856,55 +854,3 @@ def test_governance_posture_preventive_does_not_score_and_lands_in_payload():
     assert "divergence" not in prev  # only the arc's own contrast block
     assert "owner" not in json.dumps(payload["findings"]["governance_posture"])
     assert set(payload.keys()) == _FINDINGS_KEYS
-
-
-# -- R5: multi-run comparison ------------------------------------------------
-# Two findings.json of one account over time. The versioned query set is why a
-# moved number can be attributed to an estate change vs a definition change.
-
-def _two_runs():
-    store, _config = _scored_store("median")
-    baseline = build_findings(store, "r")
-    current = copy.deepcopy(baseline)
-    # A later run of the same site, same query set: one estate number moved.
-    current["meta"]["run_id"] = "r2"
-    rt = current["findings"]["retirement"]
-    rt["zero_view_workbooks"] = rt.get("zero_view_workbooks", 0) + 3
-    return baseline, current
-
-
-def test_comparison_flags_a_moved_number_as_estate_change():
-    baseline, current = _two_runs()
-    delta = compare_runs(baseline, current)
-    assert delta["comparable"] is True
-    assert delta["warnings"] == []
-    rows = delta["findings"]["retirement"]
-    zvw = next(r for r in rows if r["key"] == "zero_view_workbooks")
-    assert zvw["delta"] == 3
-    md = render_comparison_markdown(delta)
-    assert "Zero-view workbooks" in md
-    assert "+3" in md
-    # No composite score is compared -- the footer says so and no `score` column
-    # is emitted.
-    assert "No composite score is compared" in md
-
-
-def test_comparison_warns_when_query_set_changed():
-    baseline, current = _two_runs()
-    # A changed query set means a moved number may be a changed definition, not a
-    # changed estate: the comparison must say so and stop calling it like-for-like.
-    current["meta"]["query_set_version"] = "v2"
-    delta = compare_runs(baseline, current)
-    assert delta["comparable"] is False
-    assert any("query set" in w for w in delta["warnings"])
-    md = render_comparison_markdown(delta)
-    assert "not a clean like-for-like delta" in md
-    assert "query set changed" in md
-
-
-def test_comparison_warns_when_site_differs():
-    baseline, current = _two_runs()
-    current["meta"]["site_name"] = "a different site"
-    delta = compare_runs(baseline, current)
-    assert delta["comparable"] is False
-    assert any("site differs" in w for w in delta["warnings"])

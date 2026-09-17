@@ -85,7 +85,7 @@ The live path is read-only, enforced in code, and needs a **read-only Personal A
    estate_scan report     --out out/live
    ```
 
-Three more subcommands support the live workflow: `resolve` (execute read-only VizQL Data Service queries to test material disagreement between metric variants — a full-mode step run with the analyst present), `smoke` (a guarded read-only connectivity self-test), and `calibrate` / `compare` (emit threshold distributions from a run, and diff two runs of one account over time). Run `estate_scan <command> --help` for the options on each.
+Three more subcommands support the live workflow: `resolve` (execute read-only VizQL Data Service queries to test material disagreement between metric variants — a full-mode step run with the analyst present), `smoke` (a guarded read-only connectivity self-test), and `calibrate` (emit threshold distributions from a run). Run `estate_scan <command> --help` for the options on each.
 
 **Security notes.** Read-only is enforced structurally by three in-code gates, so the live client cannot issue a mutation. The PAT secret is only ever read from the environment or the OS keychain — putting a secret in the config file is a hard error (the CLI scans the config and aborts before any client is built, naming the offending key but never the value). The tool talks only to your own Tableau host, and the offline pass makes no external calls. Run the credential-bearing commands (`--live`, `smoke`, `resolve --live`) yourself in your own terminal.
 
