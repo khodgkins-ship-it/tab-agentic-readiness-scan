@@ -205,8 +205,10 @@ def _seed_group(store, run_id="r"):
         ("f_bad", 4, 10, 1, False),
     ]
     for fid, rank, views, wbs, dom in variants:
-        store.save_metric_variant(run_id, "g1", fid, "h_" + fid, rank, views,
-                                  wbs, dom)
+        # Each variant is its own definition here (distinct formulas), so the
+        # definition_key is distinct per field.
+        store.save_metric_variant(run_id, "g1", fid, "h_" + fid, "d_" + fid,
+                                  rank, views, wbs, dom)
     store.commit()
 
 

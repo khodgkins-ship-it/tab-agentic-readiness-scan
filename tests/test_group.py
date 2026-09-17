@@ -1,20 +1,27 @@
-"""M4 acceptance -- concept grouping under the precision-first rewrite.
+"""M4 acceptance -- concept-level grouping.
 
-Grouping is exact formula-signature bucketing (see estate_scan/derive/group.py):
-a field joins exactly one bucket keyed by (agg-function set, base-column set,
-is-ratio). The load-bearing property is that the deterministic path NEVER fuses
-unrelated calculations -- the failure the earlier transitive-linking design
-produced on templated estates, where one shared hub column or boilerplate name
-token chained thousands of distinct KPIs into one spurious "concept."
+Grouping runs in two steps (see estate_scan/derive/group.py):
 
-The deliberate, documented cost is under-grouping: differently-*shaped*
-definitions of one business metric (Net Rev = Sales - Discount vs Revenue = Sales)
-land in SEPARATE groups. Merging those is a semantic judgment reserved for the
-opt-in model pass; the deterministic tiers err toward showing a concept's
-definitions apart rather than fabricating a merge. So the fixture's 47 planted
-revenue-named fields (15 distinct definitions -- see manifest) no longer collapse
-into a single group: they surface as several signature-coherent buckets, and the
-largest holds the identically-shaped plain-SUM([Sales]) definitions.
+  1. formula-signature bucketing: a field joins exactly one bucket keyed by
+     (agg-function set, base-column set, is-ratio). A bucket is one *definition*.
+  2. concept fold: buckets that carry the SAME declared core-metric label fold
+     into one concept group, so "revenue defined seven ways" is ONE row, not
+     seven. Multiplicity, dominance, and the finding all operate at the concept
+     level; the definition count underneath is "defined N ways".
+
+The load-bearing safety property survives the fold: the ONLY key buckets merge
+on is a confident declared core-metric label -- a curated, human-supplied name.
+A bucket that falls back to an observed field name never merges with another, so
+a shared hub column or boilerplate token can still never chain unrelated KPIs
+into a spurious concept (the failure the earlier transitive-linking design
+produced on templated estates). And folding is by declared NAME, never by
+formula meaning: a differently-*named* revenue variant such as "Net Rev" or
+"Rev USD" stays its own group rather than being guessed into the revenue
+concept -- the tool never authors or infers a definition (THE HARD RULE).
+
+So the fixture's planted revenue-named fields collapse into a single revenue
+concept carrying several distinct definitions, while the differently-named
+revenue-shaped fields remain separate concepts.
 
 The pipeline still works from field names, resolved formulas, and the
 usage_events join alone -- the fixture client strips the `_`-prefixed ground
@@ -65,105 +72,104 @@ def _resolved_formulas(store):
 
 def _group_signatures(store, gid):
     """The distinct formula signatures among a group's members. A
-    signature-coherent group has exactly one."""
+    signature-coherent group has exactly one; a folded concept has one per
+    definition."""
     resolved = _resolved_formulas(store)
     return {_signature(resolved[m["field_id"]])
             for m in store.metric_variants("r", gid)}
 
 
-def _group_of(store, substring):
-    """The group whose members include a field whose name contains `substring`
-    (case-insensitive). Returns (group_row, [member field names])."""
-    names = _field_names(store)
-    for g in store.metric_groups("r"):
-        members = store.metric_variants("r", g["group_id"])
-        member_names = [names[m["field_id"]] for m in members]
-        if any(substring.lower() in n.lower() for n in member_names):
-            return g, member_names, members
-    raise AssertionError("no group contains a field matching %r" % substring)
+def _group_definitions(store, gid):
+    """The distinct definition_keys among a group's members -- the "defined N
+    ways" count the finding reports."""
+    return {m["definition_key"] for m in store.metric_variants("r", gid)}
 
 
-# -- the deterministic path never fuses unrelated calculations ---------------
+# -- the deterministic path merges only on a declared core-metric label ------
 
-def test_every_group_is_signature_coherent():
-    # THE core guarantee of the precision-first rewrite: a field joins exactly
-    # one bucket keyed by its formula signature, so every group's members share
-    # one (agg-functions, base-columns, is-ratio) signature. This is what stops
-    # a shared hub column or boilerplate name token from chaining unrelated KPIs
-    # into a spurious concept -- the failure the earlier transitive-linking
-    # design produced on templated estates.
+def test_cross_signature_merge_only_under_a_core_metric_label():
+    # THE core safety guarantee, preserved through the concept fold: a group
+    # spans more than one formula signature ONLY when it is a declared
+    # core-metric concept. Any group whose label is not a declared core metric is
+    # a single signature bucket -- so a shared hub column or boilerplate name
+    # token can still never chain unrelated KPIs into a spurious concept.
     store, _, _ = _grouped_store("median")
+    core = set(FixtureClient.from_path(
+        os.path.join(FIXTURES, "median", "estate.json")).run_config()[
+            "core_metrics"])
     for g in store.metric_groups("r"):
         sigs = _group_signatures(store, g["group_id"])
-        assert len(sigs) == 1, (g["group_id"], g["canonical_label"], sigs)
+        if len(sigs) > 1:
+            assert g["canonical_label"] in core, (
+                g["group_id"], g["canonical_label"], sigs)
 
 
-# -- acceptance: revenue splits by definition shape --------------------------
+# -- acceptance: revenue is ONE concept, defined several ways -----------------
 
-def test_revenue_variants_split_by_formula_signature():
-    # The 47 planted revenue-named fields carry 15 distinct definitions (see
-    # manifest). Precision-first grouping does NOT collapse them into one
-    # concept: differently-shaped definitions land in separate buckets. The
-    # identically-shaped plain-SUM([Sales]) definitions form the largest bucket.
+def test_revenue_is_one_concept_defined_several_ways():
+    # The planted revenue-named fields fold into a SINGLE revenue concept (not
+    # one group per formula shape). Within it, the distinct formula signatures
+    # are the "defined N ways" count. Usage has settled on one definition, so the
+    # concept is dominant -- a documentation problem, not a governance one.
     store, _, _ = _grouped_store("median")
 
-    revenue_groups = []
-    for g in store.metric_groups("r"):
-        members = store.metric_variants("r", g["group_id"])
-        names = _field_names(store)
-        if any("revenue" in names[m["field_id"]].lower()
-               or names[m["field_id"]] in ("Rev Base", "Rev Net")
-               for m in members):
-            revenue_groups.append((g, members))
-
-    # Not one merged group -- several signature-coherent ones.
-    assert len(revenue_groups) >= 5, len(revenue_groups)
-
-    # The largest revenue bucket is the identically-shaped plain-revenue set.
-    g, members = max(revenue_groups, key=lambda gm: len(gm[1]))
-    assert len(members) == 19, len(members)
-    assert len(_group_signatures(store, g["group_id"])) == 1
-    # It is a clean concept: one definition dominates its own usage.
+    revenue_groups = [g for g in store.metric_groups("r")
+                      if g["canonical_label"] == "revenue"]
+    assert len(revenue_groups) == 1, [g["canonical_label"] for g in revenue_groups]
+    g = revenue_groups[0]
+    members = store.metric_variants("r", g["group_id"])
+    # One concept, many fields, several definitions.
+    assert len(members) == 44, len(members)
+    assert len(_group_definitions(store, g["group_id"])) == 7, \
+        _group_definitions(store, g["group_id"])
+    # Dominance is a definition-level decision: exactly one field (the top of the
+    # winning definition) carries the flag.
     dom = [m for m in members if m["is_dominant"]]
     assert len(dom) == 1
 
 
-def test_differently_shaped_revenue_variants_stay_separate():
-    # Revenue = SUM([Sales]); Total Revenue = SUM([Sales]) + SUM([Shipping]);
-    # Net Rev = SUM([Sales]) - SUM([Discount]); Rev USD = SUM([Sales]) * [FX Rate].
-    # Four different formula shapes -> four different signatures -> four groups.
-    # Deterministically merging them is a semantic judgment (they *mean* one
-    # metric) reserved for the opt-in model pass; the deterministic path must
-    # not fabricate that merge.
+def test_differently_named_revenue_variants_stay_separate():
+    # Folding is by declared NAME, never by formula meaning. "Revenue" and
+    # "Total Revenue" carry the core-metric token, so they belong to the revenue
+    # concept. "Net Rev" and "Rev USD" do NOT carry it: the tool must not guess
+    # they *mean* revenue and merge them -- that is a semantic judgment reserved
+    # for the opt-in model pass (THE HARD RULE). They stay their own concepts.
     store, _, _ = _grouped_store("median")
     names = _field_names(store)
-    wanted = ["Revenue", "Total Revenue", "Net Rev", "Rev USD"]
 
-    group_ids = {}
-    for g in store.metric_groups("r"):
-        member_names = {names[m["field_id"]]
-                        for m in store.metric_variants("r", g["group_id"])}
-        for w in wanted:
-            if w in member_names:
-                group_ids[w] = g["group_id"]
+    def group_of_name(name):
+        for g in store.metric_groups("r"):
+            member_names = {names[m["field_id"]]
+                            for m in store.metric_variants("r", g["group_id"])}
+            if name in member_names:
+                return g["canonical_label"]
+        raise AssertionError("not found in any group: %r" % name)
 
-    missing = [w for w in wanted if w not in group_ids]
-    assert not missing, "not found in any group: %s" % missing
-    # Each differently-shaped variant is in its own distinct group.
-    assert len(set(group_ids.values())) == 4, group_ids
+    # The revenue-named fields fold into the revenue concept.
+    assert group_of_name("Revenue") == "revenue"
+    assert group_of_name("Total Revenue") == "revenue"
+    # The differently-named revenue-shaped fields are NOT folded in.
+    assert group_of_name("Net Rev") != "revenue"
+    assert group_of_name("Rev USD") != "revenue"
 
 
-# -- acceptance: active customer ---------------------------------------------
+# -- acceptance: active customer is one contested concept --------------------
 
-def test_active_customer_variants_split_by_formula_signature():
-    # The planted active-customer fields (14 variants, 9 distinct definitions)
-    # likewise split by formula shape rather than collapsing into one concept.
-    # The bucket found by name is signature-coherent and not dominated.
+def test_active_customer_is_one_contested_concept():
+    # The planted active-customer fields fold into a SINGLE concept carrying
+    # several definitions. No definition has settled the concept, so it is
+    # contested (no dominant field) -- the governance problem the backlog
+    # surfaces first.
     store, _, _ = _grouped_store("median")
 
-    g, member_names, members = _group_of(store, "Customers Active")
-    assert len(members) == 3, member_names
-    assert len(_group_signatures(store, g["group_id"])) == 1
+    groups = [g for g in store.metric_groups("r")
+              if g["canonical_label"] == "active_customer"]
+    assert len(groups) == 1, [g["canonical_label"] for g in groups]
+    g = groups[0]
+    members = store.metric_variants("r", g["group_id"])
+    assert len(members) == 10, len(members)
+    assert len(_group_definitions(store, g["group_id"])) == 4, \
+        _group_definitions(store, g["group_id"])
     dom = [m for m in members if m["is_dominant"]]
     assert not dom
 
@@ -238,8 +244,8 @@ def test_rank_summary_emits_distributions_for_calibration():
     _, _, rank_summary = _grouped_store("median")
     assert "variant_count_distribution" in rank_summary
     assert "dominance_ratios" in rank_summary
-    # Signature bucketing yields many small coherent groups, so several carry a
-    # dominant definition (not the single merged-revenue group of the old
-    # design). The calibration figure is emitted; assert it is present and sane.
+    # Concept grouping yields a mix of settled and contested concepts; the
+    # dominant-group count is the calibration figure. Assert it is present and
+    # sane (emitted, not tuned against).
     assert isinstance(rank_summary["dominant_groups"], int)
     assert rank_summary["dominant_groups"] >= 1, rank_summary["dominant_groups"]

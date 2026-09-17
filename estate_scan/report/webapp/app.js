@@ -166,6 +166,12 @@
   function renderDefinitions() {
     var dm = (DATA.findings && DATA.findings.definition_multiplicity) || {};
     var groups = (dm.groups || []).slice();
+    // The table lists only multiply-defined concepts. A single-definition concept
+    // has no variant to adjudicate, so it is not a row (the census lede still
+    // counts it "in scope").
+    var tableGroups = groups.filter(function (g) {
+      return g.multiplicity || (g.definition_count || 0) > 1;
+    });
     addSection("finding-definitions", "Finding 1 · Definition multiplicity",
       function (sec) {
         sec.classList.add("finding");
@@ -182,7 +188,7 @@
             "multiply-defined, not shown as contested.";
         else
           lede += "; " + (dm.contested_group_count || 0) +
-            " with no dominant variant.";
+            " with no dominant definition.";
         sec.appendChild(el("p", {class: "lede"}, [txt(lede)]));
 
         // Sort order over the per-group dominance state (mirrors findings.py):
@@ -196,7 +202,8 @@
 
         var cols = [
           {key: "label", label: "Metric", num: false},
-          {key: "variant_count", label: "Variants", num: true},
+          {key: "definition_count", label: "Definitions", num: true},
+          {key: "variant_count", label: "Fields", num: true},
           {key: "workbooks_affected", label: "Workbooks", num: true},
           {key: "disagreeing_variants", label: "Disagreeing", num: true},
           {key: "variants_covering_80pct_views", label: "Cover 80%", num: true},
@@ -204,6 +211,10 @@
         ];
         // Default sort: absence of a dominant variant first (build brief 6),
         // then more disagreement, then more variants.
+        // Only render the table when there is at least one multiply-defined
+        // concept; otherwise the lede alone tells the story ("0 defined more
+        // than once") and an empty grid would be noise.
+        if (tableGroups.length) {
         var sortKey = "_default", sortDir = 1;
         var wrap = el("div", {class: "tbl-wrap"});
         var table = el("table", {class: "grid", id: "dm-table"});
@@ -214,11 +225,12 @@
         function defaultCmp(a, b) {
           return (domRank(a) - domRank(b)) ||
             (b.disagreeing_variants - a.disagreeing_variants) ||
+            (b.definition_count - a.definition_count) ||
             (b.variant_count - a.variant_count) ||
             a.label.localeCompare(b.label);
         }
         function draw() {
-          var rows = groups.slice();
+          var rows = tableGroups.slice();
           if (sortKey === "_default") rows.sort(defaultCmp);
           else rows.sort(function (a, b) {
             var av = a[sortKey], bv = b[sortKey];
@@ -249,6 +261,7 @@
             var tr = el("tr", {class: "clickable", tabindex: "0",
               "aria-expanded": "false"});
             tr.appendChild(el("td", {}, [txt(g.label)]));
+            tr.appendChild(el("td", {class: "num", text: num(g.definition_count)}));
             tr.appendChild(el("td", {class: "num", text: num(g.variant_count)}));
             tr.appendChild(el("td", {class: "num", text: num(g.workbooks_affected)}));
             tr.appendChild(el("td", {class: "num", text: num(g.disagreeing_variants)}));
@@ -257,8 +270,8 @@
             // Singular concept (one definition) shows "—", not "no": there is
             // no dominance to lack. Unmeasured shows the honest word, not "no".
             var dom = g.dominance ||
-              (g.dominant ? "dominant" : (g.variant_count > 1 ? "contested"
-                                                              : "singular"));
+              (g.dominant ? "dominant" : (g.definition_count > 1 ? "contested"
+                                                                 : "singular"));
             var dcell;
             if (dom === "dominant") dcell = el("td", {}, [txt("yes")]);
             else if (dom === "singular")
@@ -291,8 +304,11 @@
         }
         draw();
         sec.appendChild(el("p", {class: "baseline-note", text:
-          "Sorted by absence of a dominant variant, not raw variant count: a " +
+          "\"Definitions\" is the number of distinct formulas for a concept " +
+          "(defined N ways); \"Fields\" is how many calculated fields carry them. " +
+          "Sorted by absence of a dominant definition, not raw count: a " +
           "contested concept is the harder adjudication."}));
+        }
       });
   }
 

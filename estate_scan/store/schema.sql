@@ -236,6 +236,12 @@ CREATE TABLE IF NOT EXISTS metric_variants (
     group_id        TEXT,
     field_id        TEXT,
     normalized_hash TEXT,
+    -- The field's formula-signature key ({agg funcs, base columns, is-ratio},
+    -- serialized). Within a concept group, one distinct definition_key == one
+    -- distinct definition ("defined N ways" counts distinct keys). Dominance is
+    -- decided over definitions, so this is the grouping unit rank.py aggregates
+    -- views by. Written by group.py alongside membership.
+    definition_key  TEXT,
     usage_rank      INTEGER,
     view_count      INTEGER,
     workbook_count  INTEGER,

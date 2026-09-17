@@ -39,8 +39,8 @@ _INVALID = re.compile(r"[\[\]\*\?/\\:]")
 _DOMINANCE_CELL = {"dominant": "yes", "contested": "no",
                    "unmeasured": "unmeasured", "singular": "—"}
 _DOMINANCE_SUBTITLE = {
-    "dominant": "dominant variant present",
-    "contested": "no dominant variant",
+    "dominant": "dominant definition present",
+    "contested": "no dominant definition",
     "unmeasured": "dominance not measured this run",
     "singular": "single definition",
 }
@@ -94,8 +94,8 @@ def _overview(ws, findings, groups):
                 "Do not circulate with the presentation build.")
     ws["A3"].font = Font(italic=True)
 
-    head = ["Metric", "Variants", "Workbooks", "Disagreeing", "Cover 80%",
-            "Dominant"]
+    head = ["Metric", "Definitions", "Fields", "Workbooks", "Disagreeing",
+            "Cover 80%", "Dominant"]
     row = 5
     for i, h in enumerate(head, start=1):
         c = ws.cell(row=row, column=i, value=h)
@@ -103,12 +103,13 @@ def _overview(ws, findings, groups):
     for g in groups:
         row += 1
         ws.cell(row=row, column=1, value=g.get("label"))
-        ws.cell(row=row, column=2, value=g.get("variant_count"))
-        ws.cell(row=row, column=3, value=g.get("workbooks_affected"))
-        ws.cell(row=row, column=4, value=g.get("disagreeing_variants"))
-        ws.cell(row=row, column=5, value=g.get("variants_covering_80pct_views"))
-        ws.cell(row=row, column=6, value=_dominance_cell(g))
-    widths = [30, 10, 11, 12, 10, 10]
+        ws.cell(row=row, column=2, value=g.get("definition_count"))
+        ws.cell(row=row, column=3, value=g.get("variant_count"))
+        ws.cell(row=row, column=4, value=g.get("workbooks_affected"))
+        ws.cell(row=row, column=5, value=g.get("disagreeing_variants"))
+        ws.cell(row=row, column=6, value=g.get("variants_covering_80pct_views"))
+        ws.cell(row=row, column=7, value=_dominance_cell(g))
+    widths = [30, 12, 10, 11, 12, 10, 10]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.freeze_panes = "A6"
@@ -117,12 +118,13 @@ def _overview(ws, findings, groups):
 def _group_sheet(ws, g):
     ws["A1"] = g.get("label")
     ws["A1"].font = Font(bold=True, size=13)
-    ws["A2"] = "%d variants  ·  %s" % (
+    ws["A2"] = "defined %d way(s) across %d field(s)  ·  %s" % (
+        g.get("definition_count") or 0,
         g.get("variant_count") or 0,
         _DOMINANCE_SUBTITLE.get(
             g.get("dominance"),
-            "dominant variant present" if g.get("dominant")
-            else "no dominant variant"))
+            "dominant definition present" if g.get("dominant")
+            else "no dominant definition"))
 
     header_row = 4
     for i, (label, width, _key) in enumerate(_COLS, start=1):

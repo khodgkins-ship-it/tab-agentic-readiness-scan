@@ -107,19 +107,25 @@ def _meta(store, run_id, now):
 # leads. A genuinely contested concept (>=2 definitions, none winning) is a
 # governance problem and comes first; an unmeasured one (>=2 definitions, but
 # usage was not measured so which wins is undeterminable) next; a settled one (a
-# dominant variant) after; a singular concept (one definition -- not a
+# dominant definition) after; a singular concept (one definition -- not a
 # multiplicity finding at all) last.
 _DOMINANCE_ORDER = {"contested": 0, "unmeasured": 1, "dominant": 2, "singular": 3}
 
 
 def _definition_multiplicity(store, run_id):
     # type: (object, str) -> dict
-    # Dominance is usage-derived (rank.py orders variants by view count), so it
+    # Dominance is usage-derived (rank.py aggregates views by definition), so it
     # is only determinable when usage_events measured. If that measure is not
-    # `ok` (e.g. REST 501 on the live path), "no dominant variant" cannot be
+    # `ok` (e.g. REST 501 on the live path), "no dominant definition" cannot be
     # asserted -- a concept is not "contested", its dominance is simply unknown
-    # (plan invariant 7). Multiplicity itself -- whether a concept has more than
-    # one definition -- is structural and stays determinable regardless.
+    # (plan invariant 7). Multiplicity itself -- whether a concept carries more
+    # than one definition -- is structural and stays determinable regardless.
+    #
+    # A "definition" is a formula signature (definition_key), NOT a field: a
+    # concept like "revenue" is one row even when forty fields compute it, and it
+    # is "defined N ways" where N is the count of distinct definition_keys. The
+    # field count is kept as variant_count for the working detail, but every
+    # multiplicity / dominance decision is made over definitions.
     usage_measured = store.coverage_status(run_id, "usage_events") == "ok"
     groups = []  # type: List[dict]
     for g in store.metric_groups(run_id):
@@ -127,18 +133,18 @@ def _definition_multiplicity(store, run_id):
         variants = store.group_variant_detail(run_id, gid)
         group_views = sum((v["view_count"] or 0) for v in variants)
         variant_count = len(variants)
-        # "materially disagreeing" = distinct resolved definitions among the
-        # variants that carry usage; a definition nobody uses is not a live
-        # disagreement. Falls back to all variants when none carry usage.
-        used_hashes = {v["normalized_hash"] for v in variants
-                       if (v["view_count"] or 0) > 0}
-        disagreeing = len(used_hashes) or len(
-            {v["normalized_hash"] for v in variants})
+        definition_count = len({v["definition_key"] for v in variants})
+        # "materially disagreeing" = distinct definitions among the variants that
+        # carry usage; a definition nobody uses is not a live disagreement. Falls
+        # back to all definitions when none carry usage.
+        used_defs = {v["definition_key"] for v in variants
+                     if (v["view_count"] or 0) > 0}
+        disagreeing = len(used_defs) or definition_count
         has_dominant = any(v["is_dominant"] for v in variants)
         # A concept with a single definition is not multiplicity: there is
-        # nothing to adjudicate and no dominance to determine. Only >=2-variant
-        # concepts can be contested (and only when usage measured).
-        multiplicity = variant_count >= 2
+        # nothing to adjudicate and no dominance to determine. Only concepts with
+        # >=2 definitions can be contested (and only when usage measured).
+        multiplicity = definition_count >= 2
         if not multiplicity:
             dominance = "singular"
         elif not usage_measured:
@@ -159,6 +165,7 @@ def _definition_multiplicity(store, run_id):
             "method": g["method"],
             "confidence": g["confidence"],
             "variant_count": variant_count,
+            "definition_count": definition_count,
             "workbooks_affected": store.group_workbook_count(run_id, gid),
             "disagreeing_variants": disagreeing,
             "variants_covering_80pct_views": cover80_for(store, run_id, gid),
@@ -178,6 +185,7 @@ def _definition_multiplicity(store, run_id):
         groups.append(group)
     groups.sort(key=lambda x: (_DOMINANCE_ORDER[x["dominance"]],
                                -x["disagreeing_variants"],
+                               -x["definition_count"],
                                -x["variant_count"], x["label"]))
     multiplicity_groups = [g for g in groups if g["multiplicity"]]
     return {

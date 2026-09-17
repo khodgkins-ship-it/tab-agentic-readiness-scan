@@ -113,6 +113,7 @@ def _dm_group(g):
     out = {
         "group_id": g.get("group_id"),
         "label": g.get("label"),
+        "definition_count": g.get("definition_count"),
         "variant_count": g.get("variant_count"),
         "workbooks_affected": g.get("workbooks_affected"),
         "disagreeing_variants": g.get("disagreeing_variants"),

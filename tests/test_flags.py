@@ -76,27 +76,25 @@ def test_prototype_flags_match_manifest():
     # SEC-01: 22 calculated fields carry a user-context function
     assert rows["SEC-01"][0]["count"] == expected["SEC-01"]["count"] == 22
 
-    # SEM-01/SEM-02 are detected PER GROUP (one formula-signature bucket).
-    # Precision-first grouping fragments each concept into several buckets, so
-    # detection under-counts the planted ground truth on purpose: only a metric
-    # with a single-definition bucket that itself exceeds the threshold trips
-    # SEM-01. The manifest still records what genuinely proliferates (all five
-    # core metrics); the assertions below record what the deterministic path
-    # honestly flags. Both flags still fire -- the `fires: true` loop above holds.
+    # SEM-01/SEM-02 are detected PER CONCEPT now (concept-level grouping folds a
+    # metric's formula-signature buckets into one row "defined N ways"). So
+    # detection lines up with the planted ground truth instead of under-counting
+    # it: a metric that proliferates into more than five fields trips SEM-01
+    # whatever shapes those fields take.
 
-    # SEM-01: metrics whose largest single-definition bucket exceeds five variants.
-    # (Ground truth: all five core metrics proliferate; deterministic detection
-    # sees only those two whose plurality concentrates in one bucket.)
-    assert rows["SEM-01"][1]["groups"] == ["gross_margin", "revenue"]
-    assert set(expected["SEM-01"]["groups"]) >= set(rows["SEM-01"][1]["groups"])
-
-    # SEM-02: concepts with a non-dominant bucket carrying real usage
-    # disagreement. Splitting revenue into shape buckets means some revenue
-    # buckets are non-dominant, so revenue now trips SEM-02 too (it did not as a
-    # single dominant group) -- the acknowledged cost of under-grouping.
-    assert rows["SEM-02"][1]["groups"] == [
+    # SEM-01: concepts defined by more than five fields. All five core metrics
+    # proliferate past the threshold, matching the manifest ground truth exactly.
+    assert rows["SEM-01"][1]["groups"] == [
         "active_customer", "average_order_value", "churn_rate",
         "gross_margin", "revenue"]
+    assert set(expected["SEM-01"]["groups"]) == set(rows["SEM-01"][1]["groups"])
+
+    # SEM-02: concepts with no dominant definition -- a genuine governance
+    # contest. The three contested concepts trip it; revenue and gross_margin
+    # have settled on one definition (dominant), so they do not.
+    assert rows["SEM-02"][1]["groups"] == [
+        "active_customer", "average_order_value", "churn_rate"]
+    assert set(expected["SEM-02"]["groups"]) == set(rows["SEM-02"][1]["groups"])
 
     # SEM-03 describability sits above threshold, so it must be silent -- an
     # unmeasured facet is never a clean one, but a measured pass is.
