@@ -38,9 +38,14 @@ DEFAULT_DATASOURCE = "Admin Insights Starter"
 DEFAULT_WINDOW_DAYS = 90
 DEFAULT_CAPTIONS = {
     "workbook_luid": "Item LUID",       # the viewed item's luid (joins workbooks.luid)
-    "event_type": "Event Type Name",    # e.g. "Access View"
-    "view_event_value": "Access View",  # the event-type value that is a view
-    "event_date": "Event Date",         # the event timestamp (date grain)
+    # TS Events carries BOTH "Event Type" (coarse action: Access/Create/Update/
+    # Delete) and "Event Name" (the specific event, e.g. "Access View"). A view is
+    # the specific event, so filter on "Event Name"="Access View"; "Event Type"=
+    # "Access" would over-count (data-source access, downloads, ...). Confirmed
+    # against Tableau's Admin Insights TS Events dictionary and a live site (R6).
+    "event_type": "Event Name",         # the specific-event field to filter on
+    "view_event_value": "Access View",  # the Event Name value that is a view
+    "event_date": "Event Date",         # the event timestamp (UTC date grain)
 }
 # Output-column aliases so COUNT and MAX of the event date do not collide.
 _ALIAS_VIEWS = "view_count"
@@ -121,35 +126,62 @@ def build_usage_query(executor, luid, ai, now):
     return executor.build_grouped_query(luid, dimensions, measures, filters)
 
 
-def map_rows(vds_rows, ai, wb_luid_to_id, now):
-    # type: (List[dict], AdminInsightsConfig, Dict[str, str], str) -> Tuple[List[dict], dict]
-    """Map VDS result rows onto the `usage_events` row shape.
+def map_rows(vds_rows, ai, luid_to_wb_id, now, wb_id_to_luid=None):
+    # type: (List[dict], AdminInsightsConfig, Dict[str, str], str, Optional[Dict[str, str]]) -> Tuple[List[dict], dict]
+    """Map VDS result rows onto the `usage_events` row shape, rolling views up to
+    workbooks.
 
-    Keys events to internal workbook ids via `wb_luid_to_id`; a luid not in the
-    scanned estate is dropped (an event for a workbook we did not extract cannot
-    be scored). `user_id` is None -- Admin Insights is read here at per-workbook
-    grain, so per-user depth is not derived. Returns (rows, stats)."""
+    Admin Insights logs an "Access View" event against the **view** luid (a
+    sheet or dashboard), so a single workbook has one usage row per view. This
+    keys each event's `Item LUID` to an internal workbook id via `luid_to_wb_id`
+    -- a merged map of {view luid -> workbook id} and {workbook luid -> workbook
+    id}, so an event that names either the view or the workbook resolves -- then
+    **aggregates by workbook id**: view counts sum, and the workbook's last-viewed
+    date is the max across its views. A luid in neither map is dropped (an event
+    for a view/workbook we did not extract cannot be scored). `usage_events` is
+    keyed (run_id, workbook_id), so this aggregation is required -- emitting one
+    row per view would collide on that key and lose all but the last view.
+
+    `user_id` is None -- Admin Insights is read here at per-workbook grain, so
+    per-user depth is not derived. `wb_id_to_luid` (optional) supplies each
+    workbook's OWN luid for the stored `workbook_luid`; without it that column
+    falls back to the event luid (a view luid). Returns (rows, stats): `matched`
+    is workbooks with usage, `unmatched` is view rows outside the scan."""
     caps = ai.captions
     luid_cap = caps["workbook_luid"]
-    rows = []
+    wb_id_to_luid = wb_id_to_luid or {}
+    agg = {}          # workbook_id -> {"views": int, "last": str|None, "luid": str}
     unmatched = 0
     for r in vds_rows or []:
         luid = r.get(luid_cap)
         if luid is None:
             continue
-        wb_id = wb_luid_to_id.get(luid)
+        wb_id = luid_to_wb_id.get(luid)
         if wb_id is None:
             unmatched += 1
             continue
-        views = _as_int(r.get(_ALIAS_VIEWS))
+        views = _as_int(r.get(_ALIAS_VIEWS)) or 0
         last_date = r.get(_ALIAS_LAST)
+        cur = agg.get(wb_id)
+        if cur is None:
+            agg[wb_id] = {
+                "views": views,
+                "last": last_date,
+                "luid": wb_id_to_luid.get(wb_id, luid),
+            }
+        else:
+            cur["views"] += views
+            if _is_later(last_date, cur["last"]):
+                cur["last"] = last_date
+    rows = []
+    for wb_id, a in agg.items():
         rows.append({
             "workbook_id": wb_id,
-            "workbook_luid": luid,
+            "workbook_luid": a["luid"],
             "user_id": None,
-            "event_date": last_date,
-            "event_count": views,
-            "last_viewed_days_ago": _days_ago(now, last_date),
+            "event_date": a["last"],
+            "event_count": a["views"],
+            "last_viewed_days_ago": _days_ago(now, a["last"]),
         })
     return rows, {"matched": len(rows), "unmatched": unmatched}
 
@@ -182,6 +214,22 @@ def _days_ago(now_iso, date_str):
     if now is None or then is None:
         return None
     return max(0, (now.date() - then.date()).days)
+
+
+def _is_later(candidate, current):
+    # type: (Optional[str], Optional[str]) -> bool
+    """True if `candidate` is a later event date than `current` (the running max
+    across a workbook's views). A None current loses to any real date; a None
+    candidate never wins; unparseable dates fall back to a string compare so a
+    max is still chosen deterministically."""
+    if current is None:
+        return candidate is not None
+    if candidate is None:
+        return False
+    c, cur = _parse(candidate), _parse(current)
+    if c is not None and cur is not None:
+        return c > cur
+    return candidate > current
 
 
 def _parse(value):

@@ -70,6 +70,21 @@ CREATE TABLE IF NOT EXISTS workbooks (
     PRIMARY KEY (run_id, id)
 );
 
+-- Views (sheets and dashboards) that belong to a workbook. The `luid` here is
+-- the VIEW luid the Metadata API reports for a sheet/dashboard, which is the
+-- same luid Admin Insights logs as `Item LUID` on an "Access View" event. This
+-- table is the join that rolls per-view usage counts up to the owning workbook
+-- (see store.view_luid_to_workbook_id and usage_vds.map_rows); a view whose luid
+-- is null (rare, unpublished) is not stored -- it cannot be joined to usage.
+CREATE TABLE IF NOT EXISTS views (
+    run_id       TEXT,
+    luid         TEXT,     -- the VIEW luid (== Admin Insights "Item LUID")
+    workbook_id  TEXT,     -- the owning workbook's internal id
+    kind         TEXT,     -- 'sheet' | 'dashboard'
+    name         TEXT,
+    PRIMARY KEY (run_id, luid)
+);
+
 CREATE TABLE IF NOT EXISTS fields (
     run_id        TEXT,
     id            TEXT,

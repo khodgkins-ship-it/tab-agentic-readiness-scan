@@ -109,21 +109,31 @@ class _Ids(object):
 
 def _revenue_variants():
     # type: () -> List[dict]
-    """47 revenue variants. Four differently-named (Revenue / Total Revenue /
-    Net Rev / Rev USD) must land in one group. A four-member nested chain gives
-    depths 1-4. All share the [Sales]/[Amount] base so grouping recovers them.
+    """47 revenue variants. A four-member nested chain (depths 1-4) is named with
+    the "revenue" token so grouping folds it into the revenue concept by NAME --
+    the deterministic backbone recovers a metric from its declared name, not from
+    a shared base column (that structural link chained unrelated KPIs on templated
+    estates; see group.py). "Revenue" and "Total Revenue" fold in the same way.
+
+    "Net Rev" and "Rev USD" are differently-NAMED distractors: they are
+    revenue-shaped in formula but carry no "revenue" token, so the tool must NOT
+    guess they mean revenue and merge them -- that semantic judgement is reserved
+    for the opt-in model pass (THE HARD RULE). They stay their own concepts,
+    proving precision over recall.
     """
     out = []  # type: List[dict]
-    # The nested chain (lives together in one data source; depths 1..4).
-    out.append({"name": "Rev Base", "formula": "SUM([Sales])",
+    # The nested chain (lives together in one data source; depths 1..4). Named
+    # "Revenue ..." so each member folds into the revenue concept by name.
+    out.append({"name": "Revenue Base", "formula": "SUM([Sales])",
                 "chain": True, "refs": [], "def": "rev_base"})
-    out.append({"name": "Rev Net", "formula": "[Rev Base] - SUM([Refunds])",
-                "chain": True, "refs": ["Rev Base"], "def": "rev_net"})
-    out.append({"name": "Rev Net FX", "formula": "[Rev Net] * [FX Rate]",
-                "chain": True, "refs": ["Rev Net"], "def": "rev_net_fx"})
-    out.append({"name": "Rev Net FX Adj", "formula": "[Rev Net FX] + SUM([Adjustments])",
-                "chain": True, "refs": ["Rev Net FX"], "def": "rev_net_fx_adj"})
-    # The four differently-named variants.
+    out.append({"name": "Revenue Net", "formula": "[Revenue Base] - SUM([Refunds])",
+                "chain": True, "refs": ["Revenue Base"], "def": "rev_net"})
+    out.append({"name": "Revenue Net FX", "formula": "[Revenue Net] * [FX Rate]",
+                "chain": True, "refs": ["Revenue Net"], "def": "rev_net_fx"})
+    out.append({"name": "Revenue Net FX Adj", "formula": "[Revenue Net FX] + SUM([Adjustments])",
+                "chain": True, "refs": ["Revenue Net FX"], "def": "rev_net_fx_adj"})
+    # Two more revenue-named variants that fold in, plus two differently-named
+    # distractors ("Net Rev", "Rev USD") that must stay separate.
     out.append({"name": "Revenue", "formula": "SUM([Sales])", "def": "rev_sum_sales"})
     out.append({"name": "Total Revenue", "formula": "SUM([Sales]) + SUM([Shipping])",
                 "def": "rev_plus_ship"})
@@ -162,7 +172,7 @@ def _active_customer_variants():
          "COUNTD(IF [Status] = 'active' THEN [Customer ID] END)", "status"),
         ("Ordering Customers",
          "COUNTD(IF [Orders] > 0 THEN [Customer ID] END)", "orders"),
-        ("Revenue Customers",
+        ("Paying Customers",
          "COUNTD(IF [Revenue] > 0 THEN [Customer ID] END)", "revpos"),
         ("Non-Churned Customers",
          "COUNTD(IF [Churned] = FALSE THEN [Customer ID] END)", "notchurn"),
@@ -206,7 +216,13 @@ def _gross_margin_variants():
 
 
 def _churn_variants():
-    names = ["Churn Rate", "Churn %", "Customer Churn", "Churn",
+    # Six variants, all carrying the distinctive "churn" token so they fold into
+    # the churn_rate concept. "Account Churn" (not "Customer Churn"): a name whose
+    # only tokens were "customer" and "churn" shares one token with active_customer
+    # and one with churn_rate, a tie that folds into neither (the tool never
+    # guesses which was meant), so it is named to anchor churn_rate unambiguously.
+    # Two definitions spread across the names leave the concept contested.
+    names = ["Churn Rate", "Churn %", "Account Churn", "Churn",
              "Monthly Churn", "Logo Churn"]
     formulas = [
         "COUNTD([Churned Customers]) / COUNTD([Customer ID])",
@@ -217,14 +233,26 @@ def _churn_variants():
 
 
 def _aov_variants():
-    names = ["Average Order Value", "AOV", "Avg Order Value", "Order Value Avg",
-             "Mean Order Value", "AOV USD", "Avg Basket"]
-    formulas = [
-        "SUM([Sales]) / COUNTD([Order ID])",
-        "SUM([Amount]) / COUNTD([Order ID])",
+    # Seven variants. Six carry an order/value/average token and fold into the
+    # average_order_value concept; the bare abbreviation "AOV" carries no metric
+    # noun (its only token is the 3-letter "aov", which names nothing), so it stays
+    # its own concept -- the AOV analogue of revenue's "Net Rev"/"Rev USD"
+    # distractors. Two definitions (a: over [Sales], b: over [Amount]) are spread
+    # across the names so neither settles the concept: no single definition holds a
+    # dominant share, so the concept is genuinely contested, matching the planted
+    # ground truth (measure() records it non-dominant too).
+    a = "SUM([Sales]) / COUNTD([Order ID])"
+    b = "SUM([Amount]) / COUNTD([Order ID])"
+    specs = [
+        ("Average Order Value", a, "aov_a"),
+        ("AOV", b, "aov_b"),                    # abbreviation-only distractor
+        ("Avg Order Value", b, "aov_b"),
+        ("Order Value Avg", a, "aov_a"),
+        ("Mean Order Value", b, "aov_b"),
+        ("Order Value USD", a, "aov_a"),        # was "AOV USD" (no metric token)
+        ("Average Basket Value", b, "aov_b"),   # was "Avg Basket" (no order token)
     ]
-    defs = ["aov_a", "aov_b"]
-    return _simple_group(names, formulas, defs)
+    return [{"name": n, "formula": f, "def": d} for n, f, d in specs]
 
 
 # View-count distributions per group, rank-ordered (index 0 = rank 1).
@@ -694,7 +722,7 @@ def _build_hostile(seed):
     # Data source 2: NAME COLLISION -- same field name, different formula, must
     # resolve independently because resolution is scoped to the source.
     ds2 = _mk_datasource(ids, "Edge DS 2", "Hostile", rng, rich=True, certified=False)
-    ds2["fields"].append(_mk_calc(ids, "Rev Base", "SUM([Amount]) * 2", True))  # collides w/ median name idea
+    ds2["fields"].append(_mk_calc(ids, "Rev Base", "SUM([Amount]) * 2", True))  # local ref target for "Uses Rev"
     ds2["fields"].append(_mk_calc(ids, "Uses Rev", "[Rev Base] + 5", True))
 
     datasources = [ds1, ds2]

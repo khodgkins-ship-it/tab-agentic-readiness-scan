@@ -90,10 +90,10 @@ def test_prototype_flags_match_manifest():
     assert set(expected["SEM-01"]["groups"]) == set(rows["SEM-01"][1]["groups"])
 
     # SEM-02: concepts with no dominant definition -- a genuine governance
-    # contest. The three contested concepts trip it; revenue and gross_margin
-    # have settled on one definition (dominant), so they do not.
+    # contest. Four of the five core concepts trip it; only revenue has settled
+    # on one definition (its high-usage base carries dominance), so it does not.
     assert rows["SEM-02"][1]["groups"] == [
-        "active_customer", "average_order_value", "churn_rate"]
+        "active_customer", "average_order_value", "churn_rate", "gross_margin"]
     assert set(expected["SEM-02"]["groups"]) == set(rows["SEM-02"][1]["groups"])
 
     # SEM-03 describability sits above threshold, so it must be silent -- an

@@ -35,7 +35,9 @@ import os
 import pytest
 
 from estate_scan.clients.fixture import FixtureClient
-from estate_scan.derive.group import _is_candidate, _signature, assign_groups
+from estate_scan.derive.group import (
+    _content_tokens, _core_match, _core_token_sets, _is_candidate, _signature,
+    assign_groups)
 from estate_scan.derive.rank import cover80_for, rank_groups
 from estate_scan.derive.resolve import resolve_all
 from estate_scan.extract.runner import ExtractRunner
@@ -118,9 +120,11 @@ def test_revenue_is_one_concept_defined_several_ways():
     assert len(revenue_groups) == 1, [g["canonical_label"] for g in revenue_groups]
     g = revenue_groups[0]
     members = store.metric_variants("r", g["group_id"])
-    # One concept, many fields, several definitions.
-    assert len(members) == 44, len(members)
-    assert len(_group_definitions(store, g["group_id"])) == 7, \
+    # One concept, many fields, several definitions. The revenue-named nested
+    # chain, "Revenue"/"Total Revenue", and the "Revenue NN" fillers all fold in;
+    # the chain's high-usage base definition settles the concept.
+    assert len(members) == 45, len(members)
+    assert len(_group_definitions(store, g["group_id"])) == 8, \
         _group_definitions(store, g["group_id"])
     # Dominance is a definition-level decision: exactly one field (the top of the
     # winning definition) carries the flag.
@@ -167,8 +171,8 @@ def test_active_customer_is_one_contested_concept():
     assert len(groups) == 1, [g["canonical_label"] for g in groups]
     g = groups[0]
     members = store.metric_variants("r", g["group_id"])
-    assert len(members) == 10, len(members)
-    assert len(_group_definitions(store, g["group_id"])) == 4, \
+    assert len(members) == 14, len(members)
+    assert len(_group_definitions(store, g["group_id"])) == 8, \
         _group_definitions(store, g["group_id"])
     dom = [m for m in members if m["is_dominant"]]
     assert not dom
@@ -249,3 +253,50 @@ def test_rank_summary_emits_distributions_for_calibration():
     # sane (emitted, not tuned against).
     assert isinstance(rank_summary["dominant_groups"], int)
     assert rank_summary["dominant_groups"] >= 1, rank_summary["dominant_groups"]
+
+
+# -- the core-metric fold predicate, pinned directly ------------------------
+# These exercise `_core_match` in isolation -- the load-bearing decision that
+# folds a field into a declared concept only when its NAME names that concept.
+# The fixture acceptance tests above prove the whole pipeline; these pin the four
+# behaviours that keep the fold from over-reaching, so a future tweak that
+# loosened any of them fails here with a precise message rather than as a distant
+# fixture-count drift.
+
+def test_content_tokens_drop_stop_words_and_short_tokens():
+    # A function word ("of") and a two-letter token carry no metric meaning, so
+    # they are never content tokens -- "of" alone can never be the thing two
+    # names share. Plurals fold to singular so "Customers" matches "customer".
+    assert _content_tokens("Number of Deals") == frozenset({"number", "deal"})
+    assert _content_tokens("Rev by FX") == frozenset({"rev"})  # "by"/"FX" dropped
+    assert _content_tokens("Active Customers") == frozenset({"active", "customer"})
+
+
+def test_core_match_refuses_a_generic_token_only_match():
+    # "rate" is shared across a whole family (churn/win/conversion), so it is not
+    # distinctive to any one. A name whose ONLY overlap is that family token is
+    # not anchored -> it folds into NEITHER, never guessing which was meant.
+    cts = _core_token_sets(["churn_rate", "win_rate", "conversion_rate"])
+    assert _core_match("Bounce Rate", cts) is None
+
+
+def test_core_match_folds_on_a_distinctive_token():
+    # "churn" is owned by churn_rate alone, so a name carrying it anchors and
+    # folds -- even though it does not cover the metric's every token.
+    cts = _core_token_sets(["churn_rate", "win_rate", "conversion_rate"])
+    assert _core_match("Monthly Churn", cts) == "churn_rate"
+
+
+def test_core_match_folds_on_full_coverage_via_plural():
+    # Full token coverage anchors on its own; plural folding lets "Customers"
+    # cover "customer".
+    cts = _core_token_sets(["active_customer", "revenue"])
+    assert _core_match("Active Customers", cts) == "active_customer"
+
+
+def test_core_match_returns_none_on_a_tie():
+    # A name that names two metrics equally well (same coverage, same shared
+    # count, both anchored) is ambiguous: the tool folds into neither rather than
+    # picking one -- THE HARD RULE, it never guesses a definition.
+    cts = _core_token_sets(["daily_active", "monthly_active"])
+    assert _core_match("Active Daily Monthly", cts) is None

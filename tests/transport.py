@@ -216,12 +216,12 @@ class FixtureTransport(object):
         body = json.loads(request.content.decode("utf-8"))
         luid = (body.get("datasource") or {}).get("datasourceLuid")
         fields = (body.get("query") or {}).get("fields") or []
-        # A grouped query (usage extraction) carries a dimension field (no
-        # `function`) or aliased measures; answer it from the per-datasource row
-        # list. A single-measure query (material disagreement) has one function
-        # field and no alias; answer it from `vds_values`, unchanged.
-        grouped = any("fieldAlias" in f for f in fields) \
-            or any("function" not in f for f in fields)
+        # A grouped query (usage extraction) carries multiple fields (a dimension
+        # to group by plus one or more aliased measures). A single-measure query
+        # (material disagreement) is exactly one field -- with a `function` for a
+        # raw column, or WITHOUT one for a field that already aggregates (native
+        # aggregation) -- so `function` presence no longer discriminates the two.
+        grouped = len(fields) > 1 or any("fieldAlias" in f for f in fields)
         if grouped:
             return httpx.Response(200, json={"data": list(self._vds_rows.get(luid, []))})
         caption = fields[0].get("fieldCaption") if fields else None

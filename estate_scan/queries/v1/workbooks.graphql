@@ -4,6 +4,9 @@
 # feeds the embedded-share flag (DF-01). sheetCount / dashboards size the
 # workbook. Usage is NOT here -- the Metadata API does not carry view counts;
 # those come from the usage_events resource (REST / Admin Insights substitute).
+# The sheet/dashboard `luid` is the VIEW luid: Admin Insights logs "Access View"
+# events keyed by view luid, so this is the join that rolls per-view counts up to
+# the owning workbook (store.view_luid_to_workbook_id -> usage_vds.map_rows).
 query workbooks($first: Int!, $after: String) {
   workbooksConnection(first: $first, after: $after) {
     nodes {
@@ -16,8 +19,8 @@ query workbooks($first: Int!, $after: String) {
       owner { username email: name }
       upstreamDatasources { id luid name }
       embeddedDatasources { id name }
-      sheets { id name }
-      dashboards { id name }
+      sheets { id name luid }
+      dashboards { id name luid }
     }
     pageInfo { hasNextPage endCursor }
     totalCount

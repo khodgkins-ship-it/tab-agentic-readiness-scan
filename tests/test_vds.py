@@ -249,6 +249,72 @@ def test_resolve_marks_material_disagreement():
     assert cov["material_disagreement"]["status"] == "ok"
 
 
+def _seed_group_with_failing_reference(store, run_id="r"):
+    """One contested group with three executable variants. The dominant, lowest-
+    usage-rank variant -- the one `_pick_reference` would pick first -- has no
+    seeded VDS value, so its query returns None (an empty/failed baseline). The
+    two alternates return divergent figures (100 vs 130, a 30% gap)."""
+    store.load_datasources(run_id, [{"id": "ds1", "luid": "luid-1",
+                                     "name": "Sales"}])
+    fields = [
+        {"id": "f_dom", "__typename": "CalculatedField", "name": "Dominant",
+         "dataType": "REAL", "role": "MEASURE", "formula": "SUM([A])"},
+        {"id": "f_a", "__typename": "CalculatedField", "name": "AltA",
+         "dataType": "REAL", "role": "MEASURE", "formula": "SUM([B])"},
+        {"id": "f_b", "__typename": "CalculatedField", "name": "AltB",
+         "dataType": "REAL", "role": "MEASURE", "formula": "SUM([C])"},
+    ]
+    store.load_fields(run_id, "ds1", fields)
+    for fid, rf in (("f_dom", "SUM([A])"), ("f_a", "SUM([B])"),
+                    ("f_b", "SUM([C])")):
+        store.save_resolved_formula(run_id, fid, rf, "h_" + fid, 1, "resolved")
+    store.save_metric_group(run_id, "g1", "revenue", "high", "exact")
+    # f_dom is dominant and rank 1 -> the first-choice reference; f_a/f_b are the
+    # value-returning alternates.
+    store.save_metric_variant(run_id, "g1", "f_dom", "h_f_dom", "d_f_dom",
+                              1, 100, 3, True)
+    store.save_metric_variant(run_id, "g1", "f_a", "h_f_a", "d_f_a",
+                              2, 50, 2, False)
+    store.save_metric_variant(run_id, "g1", "f_b", "h_f_b", "d_f_b",
+                              3, 20, 1, False)
+    store.commit()
+
+
+def test_resolve_reselects_reference_when_first_choice_returns_none():
+    # Regression: the first-choice reference's query returns None (empty/failed).
+    # Diffing against a None baseline would NULL every variant and report a false
+    # "no disagreement". The reference must fall back to a value-returning variant
+    # so the real 30% gap between the alternates is still caught.
+    store = Store.open(":memory:")
+    _seed_group_with_failing_reference(store)
+    # "Dominant" is absent from vds_values -> its query returns None; the two
+    # alternates return divergent figures.
+    client, _ft = _connected_client(
+        vds_available=True,
+        vds_values={"luid-1::AltA": 100.0, "luid-1::AltB": 130.0})
+    try:
+        summary = resolve_material_disagreement(
+            store, "r", VdsExecutor(client), period="2024", tolerance=0.005,
+            now="2026-01-01T00:00:00Z")
+    finally:
+        client.close()
+
+    assert summary["material_groups"] == 1
+    rows = {r["field_id"]: r for r in store.variant_execution_detail("r", "g1")}
+    # The failed first-choice is passed over, not made the baseline.
+    assert rows["f_dom"]["is_reference"] == 0
+    assert rows["f_dom"]["value"] is None
+    assert rows["f_dom"]["material"] is None
+    # Lowest usage rank among the value-returning variants becomes the reference.
+    assert rows["f_a"]["is_reference"] == 1
+    # The disagreement is now visible instead of collapsed to NULL.
+    assert rows["f_b"]["material"] == 1
+    assert abs(rows["f_b"]["rel_diff"] - 0.3) < 1e-9
+    # No query errored (an empty result is ok=True), so coverage is clean.
+    cov = {r["measure"]: r for r in store.coverage("r")}
+    assert cov["material_disagreement"]["status"] == "ok"
+
+
 def test_resolve_skipped_when_capability_off_records_coverage():
     store = Store.open(":memory:")
     _seed_group(store)
@@ -264,6 +330,120 @@ def test_resolve_skipped_when_capability_off_records_coverage():
     cov = {r["measure"]: r for r in store.coverage("r")}
     assert cov["material_disagreement"]["status"] == "skipped"
     assert cov["material_disagreement"]["reason"]
+
+
+# -- the budget cap (top N groups / M queries, whichever binds) --------------
+
+def _seed_two_groups(store, run_id="r"):
+    """Two groups whose group_ids sort the *opposite* way to their adjudication
+    priority, so a cap that keeps only the top group proves the contested-first
+    ordering is used (not raw group_id order):
+
+      * ``g_z_contested`` -- two distinct used definitions, neither dominant ->
+        *contested* (highest priority), two executable variants (2 queries);
+      * ``g_a_singular`` -- one definition -> *singular* (lowest priority), one
+        executable variant (1 query).
+
+    Usage is recorded measured so dominance is determinable (else both would be
+    ``unmeasured`` and the split under test would not exist)."""
+    store.record_coverage(run_id, "usage_events", "ok", "seeded for the test")
+    store.load_datasources(run_id, [{"id": "ds1", "luid": "luid-1", "name": "Sales"}])
+    fields = [
+        {"id": "hi_a", "__typename": "CalculatedField", "name": "HiA",
+         "dataType": "REAL", "role": "MEASURE", "formula": "SUM([Amount])"},
+        {"id": "hi_b", "__typename": "CalculatedField", "name": "HiB",
+         "dataType": "REAL", "role": "MEASURE", "formula": "SUM([Amt])"},
+        {"id": "lo_a", "__typename": "CalculatedField", "name": "LoA",
+         "dataType": "REAL", "role": "MEASURE", "formula": "SUM([Qty])"},
+    ]
+    store.load_fields(run_id, "ds1", fields)
+    for fid, rf in (("hi_a", "SUM([Amount])"), ("hi_b", "SUM([Amt])"),
+                    ("lo_a", "SUM([Qty])")):
+        store.save_resolved_formula(run_id, fid, rf, "h_" + fid, 1, "resolved")
+    store.save_metric_group(run_id, "g_z_contested", "high", "high", "exact")
+    store.save_metric_group(run_id, "g_a_singular", "low", "high", "exact")
+    # contested: two definitions, both carry usage, neither dominant.
+    store.save_metric_variant(run_id, "g_z_contested", "hi_a", "h_hi_a", "d_hi_a",
+                              1, 100, 3, False)
+    store.save_metric_variant(run_id, "g_z_contested", "hi_b", "h_hi_b", "d_hi_b",
+                              2, 80, 2, False)
+    # singular: one definition (dominant, but a single definition is not a contest).
+    store.save_metric_variant(run_id, "g_a_singular", "lo_a", "h_lo_a", "d_lo_a",
+                              1, 50, 1, True)
+    store.commit()
+
+
+def _run_two(store, max_groups, max_queries):
+    client, _ft = _connected_client(
+        vds_available=True,
+        vds_values={"luid-1::HiA": 100.0, "luid-1::HiB": 120.0,
+                    "luid-1::LoA": 50.0})
+    try:
+        return resolve_material_disagreement(
+            store, "r", VdsExecutor(client), period="2024",
+            now="2026-01-01T00:00:00Z",
+            max_groups=max_groups, max_queries=max_queries)
+    finally:
+        client.close()
+
+
+def _ran_group_ids(store, run_id="r"):
+    return {r["group_id"] for r in store.conn.execute(
+        "SELECT DISTINCT group_id FROM variant_execution WHERE run_id=?",
+        (run_id,)).fetchall()}
+
+
+def test_budget_cap_max_groups_keeps_top_priority_group():
+    store = Store.open(":memory:")
+    _seed_two_groups(store)
+    summary = _run_two(store, max_groups=1, max_queries=1000)
+    assert summary["groups"] == 1
+    assert "group cap" in summary["capped"]
+    # The contested group ran despite sorting *after* the singular one by
+    # group_id -- so the run followed the report's contested-first priority.
+    assert _ran_group_ids(store) == {"g_z_contested"}
+    cov = {r["measure"]: r for r in store.coverage("r")}
+    assert cov["material_disagreement"]["status"] == "partial"
+    assert "group cap" in cov["material_disagreement"]["reason"]
+
+
+def test_budget_cap_query_cap_blocks_the_next_group():
+    store = Store.open(":memory:")
+    _seed_two_groups(store)
+    # The contested group's two queries fit exactly; the singular group's one more
+    # would cross the budget, so it is left un-run (whole-group, never partial).
+    summary = _run_two(store, max_groups=10, max_queries=2)
+    assert summary["groups"] == 1
+    assert summary["executed"] == 2
+    assert "query cap" in summary["capped"]
+    assert _ran_group_ids(store) == {"g_z_contested"}
+    cov = {r["measure"]: r for r in store.coverage("r")}
+    assert cov["material_disagreement"]["status"] == "partial"
+
+
+def test_budget_cap_is_group_atomic_when_top_group_alone_exceeds_budget():
+    store = Store.open(":memory:")
+    _seed_two_groups(store)
+    # The top group needs two queries but the budget is one: a group is never
+    # half-run, so nothing executes rather than the reference alone.
+    summary = _run_two(store, max_groups=10, max_queries=1)
+    assert summary["groups"] == 0
+    assert summary["executed"] == 0
+    assert "query cap" in summary["capped"]
+    assert store.count("variant_execution", "r") == 0
+    cov = {r["measure"]: r for r in store.coverage("r")}
+    assert cov["material_disagreement"]["status"] == "partial"
+
+
+def test_no_budget_cap_runs_every_group_and_records_ok():
+    store = Store.open(":memory:")
+    _seed_two_groups(store)
+    summary = _run_two(store, max_groups=10, max_queries=1000)
+    assert summary["groups"] == 2
+    assert summary["capped"] is None
+    assert _ran_group_ids(store) == {"g_z_contested", "g_a_singular"}
+    cov = {r["measure"]: r for r in store.coverage("r")}
+    assert cov["material_disagreement"]["status"] == "ok"
 
 
 # -- the report join + redaction ---------------------------------------------

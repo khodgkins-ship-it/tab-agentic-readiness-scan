@@ -73,6 +73,16 @@ _DATE_RE = re.compile(r"#[^#]*#")
 _WORD_RE = re.compile(r"[a-z_]\w*")
 _NAME_TOKEN_RE = re.compile(r"[a-z]{2,}")
 
+# Name tokens that carry no metric meaning: articles, prepositions, conjunctions.
+# A field whose only overlap with a core metric is one of these must never fold
+# into that metric's concept -- "Number of Deals" is not "Cost of Revenue" merely
+# because both contain "of". Kept small and generic: function words only, never
+# domain nouns.
+_STOP_TOKENS = frozenset([
+    "of", "the", "an", "and", "or", "to", "in", "on", "at", "by", "for",
+    "per", "vs", "with", "from", "as", "is", "not", "no",
+])
+
 # Confidence / method vocabulary, persisted per group.
 HIGH, MEDIUM, LOW = "high", "medium", "low"
 M_EXACT, M_STRUCT, M_MODEL = "exact_match", "formula_signature", "model_assisted"
@@ -112,9 +122,24 @@ def _sig_key(cols, funcs, has_ratio):
         ",".join(sorted(funcs)), int(has_ratio), ",".join(sorted(cols)))
 
 
-def _name_tokens(name):
+def _singular(token):
+    # type: (str) -> str
+    """Fold a trailing plural 's' so "customers" matches "customer". Leaves short
+    tokens and "ss" endings ("gross", "loss") intact."""
+    if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
+    return token
+
+
+def _content_tokens(name):
     # type: (Optional[str]) -> frozenset
-    return frozenset(_NAME_TOKEN_RE.findall((name or "").lower()))
+    """The metric-bearing tokens of a name: alphabetic, >= 3 chars, not a stop
+    word, singularised. Two-letter tokens and function words are dropped -- they
+    are boilerplate or abbreviations, never a metric noun -- so a stop word like
+    "of" can never be the thing two names share."""
+    return frozenset(
+        _singular(t) for t in _NAME_TOKEN_RE.findall((name or "").lower())
+        if len(t) >= 3 and t not in _STOP_TOKENS)
 
 
 def _is_candidate(row):
@@ -140,32 +165,69 @@ def _is_candidate(row):
 # ---------------------------------------------------------------------------
 # Grouping.
 # ---------------------------------------------------------------------------
-def _label_for(members, core_metrics):
-    # type: (List[dict], List[str]) -> Tuple[str, bool]
-    """Choose a group label and say whether it is a confident core-metric match.
+def _core_token_sets(core_metrics):
+    # type: (List[str]) -> List[Tuple[str, frozenset, frozenset]]
+    """Precompute, per declared core metric, ``(label, tokens, distinctive)``.
 
-    Returns (label, is_core). `is_core` is True only when a declared core metric
-    matched the members' names outright -- that is the ONLY label safe to merge
-    signature buckets on (see assign_groups). A fallback label is an observed
-    field name and is never a merge key, so two buckets that both fell back to
-    the same generic name (e.g. "Total") are never fused. Never a synthesized
-    definition (THE HARD RULE)."""
-    name_tokens = set()
-    for m in members:
-        name_tokens |= _name_tokens(m["name"])
-    best_metric, best_score = None, 0
+    ``tokens`` is the metric label's content tokens; ``distinctive`` is the subset
+    of those tokens owned by NO other core metric. A distinctive token is the
+    metric's own name-noun ("churn" for churn_rate, "gross" for gross_margin) --
+    the thing that actually identifies it -- as opposed to a generic modifier a
+    whole family shares ("rate" across churn/win/conversion rate; "revenue" across
+    revenue and cost-of-revenue). A metric whose tokens are all boilerplate (empty
+    set) can never match, so it is dropped."""
+    prepared = []
+    owners = {}  # type: Dict[str, int]
     for cm in core_metrics or []:
-        cm_tokens = set(_NAME_TOKEN_RE.findall(cm.lower().replace("_", " ")))
-        score = len(cm_tokens & name_tokens)
-        if score > best_score:
-            best_metric, best_score = cm, score
-        elif score == best_score and score > 0 and best_metric is not None:
-            best_metric = None  # tie -> no confident metric label
-    if best_metric is not None and best_score > 0:
-        return best_metric, True
-    # Fallback: the highest-usage variant's own name (observed, not authored).
-    ranked = sorted(members, key=lambda m: (-m.get("_views", 0), m["field_id"]))
-    return (ranked[0]["name"] if ranked else ""), False
+        toks = _content_tokens(cm.replace("_", " "))
+        if toks:
+            prepared.append((cm, toks))
+            for t in toks:
+                owners[t] = owners.get(t, 0) + 1
+    return [(label, toks, frozenset(t for t in toks if owners[t] == 1))
+            for label, toks in prepared]
+
+
+def _core_match(name, core_token_sets):
+    # type: (Optional[str], List[Tuple[str, frozenset, frozenset]]) -> Optional[str]
+    """The single declared core metric this field's NAME names, or None.
+
+    Best-match over declared core metrics, decided per FIELD from the field's own
+    name (so a stray member can never relabel the whole signature bucket it shares
+    -- the pooled-bucket defect). Stop words and sub-3-char tokens are excluded
+    before matching, so "of" alone can never fuse "Number of Deals" into "Cost of
+    Revenue" (the single-stop-word defect).
+
+    Each candidate metric is scored by how completely the field NAMES it:
+    coverage (share of the metric's tokens present), then raw shared-token count.
+    The best metric wins only if it strictly beats the runner-up on that key -- a
+    tie is ambiguous and folds into neither (THE HARD RULE, the tool never guesses
+    which was meant). And a win must be *anchored*: the shared tokens either cover
+    the metric fully, or include a token distinctive to it. That anchor is what
+    stops a lone generic modifier from folding an unrelated field -- "Sales Tax"
+    shares only the family token "sales" with Sales Velocity (partial, no
+    distinctive token), so it folds into neither, while "Monthly Churn" shares the
+    distinctive "churn" and correctly folds into churn_rate."""
+    ntok = _content_tokens(name)
+    if not ntok:
+        return None
+    scored = []
+    for label, ctoks, distinctive in core_token_sets:
+        shared = ctoks & ntok
+        if not shared:
+            continue
+        anchored = shared == ctoks or bool(shared & distinctive)
+        scored.append((len(shared) / float(len(ctoks)), len(shared),
+                       anchored, label))
+    if not scored:
+        return None
+    scored.sort(key=lambda s: (s[0], s[1]), reverse=True)
+    top = scored[0]
+    if not top[2]:  # winner not anchored -> generic-token-only match, refuse
+        return None
+    if len(scored) >= 2 and (scored[1][0], scored[1][1]) == (top[0], top[1]):
+        return None  # tie on (coverage, shared count) -> ambiguous, fold neither
+    return top[3]
 
 
 def assign_groups(store, run_id, core_metrics=None, model_pass=False):
@@ -178,6 +240,7 @@ def assign_groups(store, run_id, core_metrics=None, model_pass=False):
     a label. Returns an instrumentation summary.
     """
     core_metrics = core_metrics or []
+    core_token_sets = _core_token_sets(core_metrics)
     rows = [dict(r) for r in store.calc_fields_resolved(run_id)]
     views = store.field_view_counts(run_id)
     for r in rows:
@@ -186,39 +249,43 @@ def assign_groups(store, run_id, core_metrics=None, model_pass=False):
     candidates = [r for r in rows if _is_candidate(r)]
     excluded = len(rows) - len(candidates)
 
-    # -- step 1: exact formula-signature buckets ------------------------------
-    # Each field joins exactly one bucket, keyed by its canonical signature
-    # (agg-function set, base-column set, is-ratio). This is exact-key bucketing,
-    # not transitive linking: a column or token shared with an unrelated field
-    # cannot chain distinct concepts together (see module docstring). Two fields
-    # land together only when they compute the same measure over the same inputs
-    # the same way. A bucket is one *definition*.
-    buckets = {}  # type: Dict[Tuple[frozenset, bool, frozenset], List[dict]]
+    # -- step 1: signature + core-label per field -----------------------------
+    # Each field gets a canonical signature (agg-function set, base-column set,
+    # is-ratio) -- its *definition* -- and, from its OWN name, the single declared
+    # core metric it names, if any (per-field, so no member can relabel another).
     for r in candidates:
         cols, funcs, ratio = _signature(r["resolved_formula"])
         r["_defkey"] = _sig_key(cols, funcs, ratio)
-        buckets.setdefault((funcs, ratio, cols), []).append(r)
+        r["_sigkey"] = (funcs, ratio, cols)
+        r["_core"] = _core_match(r["name"], core_token_sets)
 
     # -- step 2: fold definitions into concepts -------------------------------
-    # A business metric is defined more than once when several definitions carry
-    # the SAME declared core-metric label. Those buckets fold into one concept
-    # group so "revenue defined seven ways" is one row, not seven. The fold key
-    # is ONLY a confident core-metric label (_label_for's is_core): a curated,
-    # human-declared name, so folding can never chain unrelated fields the way
-    # the old union-find did (see module docstring). A bucket that falls back to
-    # an observed field name stays its own concept, keyed by its signature, so
-    # two unrelated buckets that happen to share a generic fallback name are
-    # never fused. Multiplicity is thus measured at the concept level while the
-    # precision of signature bucketing is preserved underneath.
+    # A business metric is defined more than once when several fields NAME the
+    # same declared core metric (e.g. "revenue defined seven ways" is one row, not
+    # seven). The fold key is that core label -- a curated, human-declared name,
+    # matched per field by full content-token coverage -- so folding can never
+    # chain unrelated fields the way the old union-find (or single-token matching)
+    # did (see module docstring). A field that names no core metric stays its own
+    # concept keyed by its exact signature, so two unrelated fields that happen to
+    # share a generic fallback name are never fused. Multiplicity is thus measured
+    # at the concept level while signature precision is preserved underneath.
     concepts = {}  # type: Dict[object, dict]
-    for key, members in buckets.items():
-        label, is_core = _label_for(members, core_metrics)
-        ckey = ("core", label) if is_core else ("solo", key)
+    for r in candidates:
+        ckey = ("core", r["_core"]) if r["_core"] else ("solo", r["_sigkey"])
         c = concepts.get(ckey)
         if c is None:
-            concepts[ckey] = {"label": label, "members": list(members)}
+            concepts[ckey] = {"label": r["_core"], "members": [r]}
         else:
-            c["members"].extend(members)
+            c["members"].append(r)
+
+    # A solo concept is labelled by its highest-usage member's own name (observed,
+    # never a synthesized definition -- THE HARD RULE). Core concepts already carry
+    # the declared label.
+    for c in concepts.values():
+        if c["label"] is None:
+            ranked = sorted(c["members"],
+                            key=lambda m: (-m.get("_views", 0), m["field_id"]))
+            c["label"] = ranked[0]["name"] if ranked else ""
 
     # -- tier 2: model-assisted -- opt-in, off by default ---------------------
     # No merges performed. Recorded so the run metadata is honest about which

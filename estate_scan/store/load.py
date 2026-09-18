@@ -214,6 +214,21 @@ class Store(object):
                  n.get("createdAt"), n.get("updatedAt"),
                  len(n.get("sheets") or []),
                  len(n.get("embeddedDatasources") or [])))
+            # View rows (sheets + dashboards): the sheet/dashboard luid is the
+            # VIEW luid Admin Insights logs as "Item LUID" on an "Access View"
+            # event, so this is the join that attributes per-view usage to the
+            # owning workbook. Only luid-bearing views are stored -- a view with
+            # no luid cannot be joined to a usage event.
+            for kind, key in (("sheet", "sheets"), ("dashboard", "dashboards")):
+                for v in n.get(key) or []:
+                    vl = v.get("luid")
+                    if not vl:
+                        continue
+                    self.conn.execute(
+                        "INSERT OR REPLACE INTO views "
+                        "(run_id, luid, workbook_id, kind, name) "
+                        "VALUES (?,?,?,?,?)",
+                        (run_id, vl, n["id"], kind, v.get("name")))
             for up in n.get("upstreamDatasources") or []:
                 if not up.get("id"):
                     continue
@@ -940,6 +955,17 @@ class Store(object):
             "SELECT id, luid FROM workbooks WHERE run_id=? AND luid IS NOT NULL",
             (run_id,))
         return {row["luid"]: row["id"] for row in cur.fetchall()}
+
+    def view_luid_to_workbook_id(self, run_id):
+        # type: (str) -> Dict[str, str]
+        """Map each VIEW luid (sheet/dashboard) to its owning workbook's internal
+        id. Admin Insights logs "Access View" events keyed by the view luid, not
+        the workbook luid, so this is the join that rolls per-view counts up to
+        the workbook (merged with workbook_luid_to_id in the usage read)."""
+        cur = self.conn.execute(
+            "SELECT luid, workbook_id FROM views WHERE run_id=? AND luid IS NOT NULL",
+            (run_id,))
+        return {row["luid"]: row["workbook_id"] for row in cur.fetchall()}
 
     def set_adoption_source(self, run_id, source):
         # type: (str, str) -> None

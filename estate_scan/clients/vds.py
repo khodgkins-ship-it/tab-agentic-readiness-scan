@@ -45,11 +45,22 @@ class VdsExecutor(object):
     @staticmethod
     def build_query_body(datasource_luid, field_caption, function="SUM",
                          period_field=None, period_value=None):
-        # type: (str, str, str, Optional[str], Optional[str]) -> dict
+        # type: (str, str, Optional[str], Optional[str], Optional[str]) -> dict
         """Build a read-only aggregate query body: one measure, optionally scoped
         to a fixed period by a categorical (SET) filter. Emits only read keys, so
-        it passes `assert_vds_body_read_only` by construction."""
-        query = {"fields": [{"fieldCaption": field_caption, "function": function}]}
+        it passes `assert_vds_body_read_only` by construction.
+
+        A falsy `function` (None or "") omits the `function` key so the field is
+        returned with its *native* aggregation. That is required for a calculated
+        field whose formula already aggregates (COUNTD, SUM(..)/SUM(..), a FIXED
+        LOD, ...): VDS rejects an outer SUM on such a field (errorCode 400800), and
+        even when a function is accepted VDS keys the output column ``FN(caption)``
+        rather than the bare caption -- so `VdsResult.value(caption)` only resolves
+        the native (no-function) form. See `derive/disagreement.vds_function`."""
+        spec = {"fieldCaption": field_caption}
+        if function:
+            spec["function"] = function
+        query = {"fields": [spec]}
         if period_field and period_value is not None:
             query["filters"] = [{
                 "field": {"fieldCaption": period_field},
