@@ -294,14 +294,14 @@ def test_definition_multiplicity_sorts_contested_first(tmp_path):
     order = [rank[g["dominance"]] for g in multiplicity]
     assert order == sorted(order)
 
-    # Revenue is a SINGLE concept, defined seven ways across 44 fields. Usage has
+    # Revenue is a SINGLE concept, defined eight ways across 45 fields. Usage has
     # settled on one definition, so the concept is dominant -- and, being
     # dominant, it never leads the table.
     rev_groups = [g for g in multiplicity if g["label"] == "revenue"]
     assert len(rev_groups) == 1
     rev = rev_groups[0]
-    assert rev["definition_count"] == 7
-    assert rev["variant_count"] == 44
+    assert rev["definition_count"] == 8
+    assert rev["variant_count"] == 45
     assert rev["dominance"] == "dominant"
     assert rev is not multiplicity[0]
 

@@ -369,18 +369,19 @@ class LiveClient(EstateClient):
     def _probe_vds(self):
         # type: () -> bool
         """Is the VizQL Data Service available on this site? Probed with a GET
-        to the (POST-only) query-datasource endpoint: a live site answers 405
-        Method Not Allowed when the service is present and 404 when it is not, so
-        a 200/405 means present. A GET always passes Gate C and needs no
-        datasource LUID. The exact readiness semantics are confirmed against a
-        real site at R6; until then the probe is conservative (absent unless the
-        endpoint clearly answers)."""
+        to the (POST-only) query-datasource endpoint. Confirmed against a real
+        Tableau Cloud site at R6: when the service is present the endpoint answers
+        the bodyless GET with 400 Bad Request (it reaches the handler, which then
+        rejects the empty/malformed query); a site without VDS answers 404. Some
+        deployments answer 405 Method Not Allowed instead. So 200/400/405 all mean
+        present, and only 404 (or a transport error) means absent. A GET always
+        passes Gate C and needs no datasource LUID."""
         self._maybe_refresh()
         try:
             resp = self._client.get(_VDS_QUERY_PATH, headers=self._auth_headers())
         except httpx.HTTPError:
             return False
-        return resp.status_code in (200, 405)
+        return resp.status_code in (200, 400, 405)
 
     def _probe_rest(self, resource):
         # type: (str) -> bool

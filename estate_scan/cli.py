@@ -203,7 +203,8 @@ def cmd_resolve(args):
         client.detect_capabilities()
         executor = VdsExecutor(client)
         summary = resolve_material_disagreement(
-            store, run_id, executor, period=args.period, tolerance=args.tolerance)
+            store, run_id, executor, period=args.period, tolerance=args.tolerance,
+            max_groups=args.max_groups, max_queries=args.max_queries)
     except AuthError as exc:
         raise SystemExit("estate-scan: %s" % exc)
     finally:
@@ -219,6 +220,12 @@ def cmd_resolve(args):
               "%d group(s) show material disagreement."
               % (run_id, summary["executed"], summary["groups"],
                  summary["material_groups"]))
+        if summary.get("capped"):
+            print("  budget cap: %s (limits: max_groups=%d, max_queries=%d); "
+                  "resolved the top group(s) in contested-first order, "
+                  "lower-priority groups were not run."
+                  % (summary["capped"], summary["max_groups"],
+                     summary["max_queries"]))
     return 0
 
 
@@ -382,6 +389,8 @@ def cmd_calibrate(args):
 
 def build_parser():
     # type: () -> argparse.ArgumentParser
+    # Single source of truth for the resolve budget-cap defaults (cheap import).
+    from estate_scan.derive import disagreement
     parser = argparse.ArgumentParser(
         prog="estate_scan",
         description="Tableau estate readiness scan (offline, fixture-driven).")
@@ -419,6 +428,17 @@ def build_parser():
     p_resolve.add_argument("--tolerance", type=float, default=0.005,
                            help="relative difference above which a variant pair "
                                 "counts as materially disagreeing")
+    p_resolve.add_argument("--max-groups", type=int,
+                           default=disagreement.DEFAULT_MAX_GROUPS,
+                           help="budget cap: resolve at most this many groups, "
+                                "taken in the report's contested-first order "
+                                "(default %(default)s)")
+    p_resolve.add_argument("--max-queries", type=int,
+                           default=disagreement.DEFAULT_MAX_QUERIES,
+                           help="budget cap: send at most this many VDS queries; "
+                                "groups run whole, so the first group that would "
+                                "cross this limit stops the run -- whichever of "
+                                "the two caps binds first wins (default %(default)s)")
     p_resolve.set_defaults(func=cmd_resolve)
 
     p_smoke = sub.add_parser(

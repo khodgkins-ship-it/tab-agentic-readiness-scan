@@ -25,7 +25,7 @@
     },
     "workbooks": {
       "file": "v1/workbooks.graphql",
-      "sha256": "028b61a14623b58f905425149ef181212cb2b7cf7c5e9032cbbc9d1500946fb4",
+      "sha256": "119e5de0678d7dc95785a556b972c7fbca54d1f9a97a4df980799fe46ed99117",
       "shard": {
         "scope": "global",
         "page_size": 200,

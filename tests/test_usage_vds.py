@@ -164,6 +164,59 @@ def test_dispatch_uses_vds_and_maps_rows():
     assert store.get_run("r")["adoption_source"] == "admin_insights"
 
 
+def test_views_roll_up_to_owning_workbook():
+    # Admin Insights logs "Access View" against the VIEW luid (a sheet or
+    # dashboard), so one workbook has several usage rows -- one per view. They
+    # must aggregate to a single usage_events row (that table is keyed by
+    # workbook_id): view counts sum, and last-viewed is the max across views.
+    store = Store.open(":memory:")
+    store.start_run("r", {"site_name": "Fixture", "deployment_type": "cloud",
+                          "adoption_source": "unavailable", "mode": "scan"})
+    store.load_datasources("r", [
+        {"id": "ds-ai", "luid": _AI_LUID, "name": "Admin Insights Starter",
+         "projectName": "Admin Insights"}])
+    store.load_workbooks("r", [
+        # w1 owns three views (two sheets + a dashboard), each with its own luid.
+        {"id": "w1", "luid": "wb-luid-1", "name": "Sales Overview",
+         "projectName": "Analytics",
+         "sheets": [{"id": "s1", "name": "Sheet A", "luid": "view-1a"},
+                    {"id": "s2", "name": "Sheet B", "luid": "view-1b"}],
+         "dashboards": [{"id": "d1", "name": "Dash 1", "luid": "view-1c"}]},
+        # w2 has no view luids -> events that name the workbook luid directly
+        # still resolve through the merged fallback map.
+        {"id": "w2", "luid": "wb-luid-2", "name": "Ops Dashboard",
+         "projectName": "Analytics"}])
+    store.commit()
+    rows = [
+        {"Item LUID": "view-1a", "view_count": 10, "last_event_date": "2026-09-10"},
+        {"Item LUID": "view-1b", "view_count": 5, "last_event_date": "2026-09-14"},
+        {"Item LUID": "view-1c", "view_count": 2, "last_event_date": "2026-06-01"},
+        {"Item LUID": "wb-luid-2", "view_count": 4, "last_event_date": "2026-09-12"},
+        # A view for a workbook outside this scan -> counted unmatched, not loaded.
+        {"Item LUID": "view-ghost", "view_count": 99, "last_event_date": "2026-09-01"},
+    ]
+    client, _ft = _connected_client(vds_available=True, vds_rows={_AI_LUID: rows})
+    try:
+        _run_usage(store, client)
+    finally:
+        client.close()
+
+    loaded = _usage_rows(store)
+    assert [r["workbook_id"] for r in loaded] == ["w1", "w2"]
+    by_wb = {r["workbook_id"]: r for r in loaded}
+    # w1's three views sum: 10 + 5 + 2 = 17; last-viewed is the max date (Sheet B).
+    assert by_wb["w1"]["event_count"] == 17
+    assert by_wb["w1"]["last_viewed_days_ago"] == 2   # 2026-09-16 - 2026-09-14
+    # The stored workbook_luid is the workbook's OWN luid, not a view luid.
+    assert by_wb["w1"]["workbook_luid"] == "wb-luid-1"
+    # w2 resolved via the direct workbook-luid fallback.
+    assert by_wb["w2"]["event_count"] == 4
+    assert by_wb["w2"]["workbook_luid"] == "wb-luid-2"
+    cov = _cov(store)
+    assert cov["usage_events"]["status"] == "ok"
+    assert "1 view rows for workbooks outside this scan" in cov["usage_events"]["reason"]
+
+
 def test_empty_result_is_ok_not_skipped():
     # A legitimately quiet site: the source resolves, the query shape is right,
     # but no views fall in the window. That is a measured zero, not a failure.

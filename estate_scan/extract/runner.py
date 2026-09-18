@@ -310,8 +310,18 @@ class ExtractRunner(object):
                          "(field captions did not resolve; confirm "
                          "admin_insights.captions for this site)")
 
+        # Admin Insights keys "Access View" events by the VIEW luid (a sheet or
+        # dashboard), so resolve events through a merged map: view luid -> wb id
+        # first, then workbook luid -> wb id (a few events name the workbook
+        # directly). map_rows aggregates the per-view rows up to one row per
+        # workbook. wb_id_to_luid gives each workbook its own luid for storage.
         wb_luid_to_id = self.store.workbook_luid_to_id(self.run_id)
-        mapped, stats = usage_vds.map_rows(rows, ai, wb_luid_to_id, now)
+        view_luid_to_id = self.store.view_luid_to_workbook_id(self.run_id)
+        luid_to_wb_id = dict(view_luid_to_id)
+        luid_to_wb_id.update(wb_luid_to_id)   # workbook-luid match wins on collision
+        wb_id_to_luid = {wid: luid for luid, wid in wb_luid_to_id.items()}
+        mapped, stats = usage_vds.map_rows(
+            rows, ai, luid_to_wb_id, now, wb_id_to_luid)
         self.store.load_usage_events(self.run_id, mapped)
         self.store.commit()
         self.store.set_adoption_source(self.run_id, "admin_insights")
